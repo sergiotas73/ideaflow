@@ -6,24 +6,21 @@
 IdeaFlow AI · VERSIÓN 13.1 · "Segundo Cerebro por Etiquetas"
 ───────────────────────────────────────────────────────────────
 CORRECCIÓN DEFINITIVA v13.1 (solo el asistente, resto intacto):
-
 PROBLEMA DETECTADO: al preguntar algo que no está en tus datos,
 siempre devolvía "He buscado en tus fichas... y no encuentro eso".
-
 CAUSA RAÍZ (3 fallos encadenados):
 1) aiChatFull() añadía ":online" al modelo → "modelo:free:online",
-   un ID que OpenRouter rechaza con 404 en la mayoría de modelos
-   gratuitos. La petición fallaba SIEMPRE.
+un ID que OpenRouter rechaza con 404 en la mayoría de modelos
+gratuitos. La petición fallaba SIEMPRE.
 2) El .catch() ocultaba el error real y devolvía el mensaje local
-   genérico, por eso nunca veías el motivo del fallo.
+genérico, por eso nunca veías el motivo del fallo.
 3) Los modelos :free por defecto estaban caducados en OpenRouter.
-
 SOLUCIÓN APLICADA:
 · La búsqueda web usa ahora el método oficial actual de OpenRouter:
-  tools:[{type:'openrouter:web_search'}] (el sufijo :online está
-  deprecado). Funciona con cualquier modelo.
+tools:[{type:'openrouter:web_search'}] (el sufijo :online está
+deprecado). Funciona con cualquier modelo.
 · Cadena de respaldo: 1º modelo con búsqueda web → si falla, el
-  modelo seleccionado a secas → si falla, muestra el ERROR REAL.
+modelo seleccionado a secas → si falla, muestra el ERROR REAL.
 · openrouter() ahora extrae el mensaje de error real de la API.
 · FREE_MODELS actualizados a modelos vigentes.
 ═══════════════════════════════════════════════════════════════
@@ -531,11 +528,12 @@ if(!hits.length)return null;
 return '🧠 De mi memoria permanente:\n'+hits.map(function(p){return '• '+p.key+': '+p.value;}).join('\n');
 }
 /* ══════════ IA: OpenRouter + respaldo ══════════
-   v13.1 · openrouter() acepta tools opcionales (método oficial
-   openrouter:web_search) y devuelve el MENSAJE DE ERROR REAL. */
+v13.1 · openrouter() acepta tools opcionales (método oficial
+openrouter:web_search) y devuelve el MENSAJE DE ERROR REAL. */
 function openrouter(messages,modelOverride,tools){
 if(!DB.settings.apiKey)return Promise.reject(new Error('sin clave API'));
-var body={model:modelOverride||DB.settings.model,messages:messages,temperature:0.6};
+/* v13.2 · max_tokens: sin límite los modelos gratuitos recortan y "no profundizan" */
+var body={model:modelOverride||DB.settings.model,messages:messages,temperature:0.6,max_tokens:1024};
 if(tools&&tools.length)body.tools=tools;
 return fetch('https://openrouter.ai/api/v1/chat/completions',{method:'POST',headers:{'Authorization':'Bearer '+DB.settings.apiKey,'Content-Type':'application/json','HTTP-Referer':'https://ideaflow.app','X-Title':'IdeaFlow AI'},body:JSON.stringify(body)})
 .then(function(res){
@@ -549,6 +547,52 @@ return res.json();
 })
 .then(function(j){return (j.choices&&j.choices[0]&&j.choices[0].message)?j.choices[0].message.content:'';});
 }
+/* v13.2 · Búsqueda web OFICIAL de OpenRouter (plugins + tools, sin :online, sin Tavily) */
+function openrouterWeb(messages,model){
+if(!DB.settings.apiKey)return Promise.reject(new Error('sin clave API'));
+var body={model:model||DB.settings.model,messages:messages,temperature:0.6,max_tokens:1400,plugins:[{id:'web',max_results:5}],tools:[{type:'openrouter:web_search'}]};
+return fetch('https://openrouter.ai/api/v1/chat/completions',{method:'POST',headers:{'Authorization':'Bearer '+DB.settings.apiKey,'Content-Type':'application/json','HTTP-Referer':'https://ideaflow.app','X-Title':'IdeaFlow AI'},body:JSON.stringify(body)})
+.then(function(res){
+if(!res.ok){
+return res.json().catch(function(){return null;}).then(function(j){
+var msg=(j&&j.error&&j.error.message)?j.error.message:('HTTP '+res.status);
+throw new Error(msg);
+});
+}
+return res.json();
+})
+.then(function(j){
+var m=(j.choices&&j.choices[0])?j.choices[0].message:null;
+if(!m)return '';
+var txt=m.content||'';
+if(m.annotations&&m.annotations.length){
+var urls=[];
+m.annotations.forEach(function(a){var u2=a.url||(a.url_citation&&a.url_citation.url);if(u2&&urls.indexOf(u2)<0)urls.push(u2);});
+if(urls.length)txt+='\n\n🔗 Fuentes: '+urls.join(' · ');
+}
+return txt;
+});
+}
+/* v13.2 · Búsqueda web GRATUITA sin claves extra (Wikipedia ES, CORS abierto) */
+function webSearchFree(query){
+var u='https://es.wikipedia.org/w/api.php?action=query&list=search&srsearch='+encodeURIComponent(query)+'&srlimit=4&format=json&origin=*';
+return fetch(u)
+.then(function(r){return r.json();})
+.then(function(j){
+var res=(j.query&&j.query.search)||[];
+if(!res.length)return '';
+var list=res.map(function(x){
+var snip=String(x.snippet||'').replace(/<[^>]+>/g,'');
+return '• "'+x.title+'" — '+snip+' (fuente: https://es.wikipedia.org/wiki/'+encodeURIComponent(String(x.title).replace(/ /g,'_'))+')';
+}).join('\n');
+var top=res[0];
+return fetch('https://es.wikipedia.org/api/rest_v1/page/summary/'+encodeURIComponent(String(top.title).replace(/ /g,'_')))
+.then(function(r){return r.json();})
+.then(function(s){return ((s&&s.extract)?('RESUMEN DETALLADO ("'+top.title+'"):\n'+s.extract+'\n\nOTRAS FUENTES:\n'+list):list);})
+.catch(function(){return list;});
+})
+.catch(function(){return '';});
+}
 function sysPrompt(){return 'Eres el asistente de IdeaFlow AI, un segundo cerebro personal con acceso a TODA la información interna del usuario. Relaciona conceptos entre notas mediante etiquetas compartidas. Responde en español, breve, claro y útil. Hoy es '+fmtLong(new Date())+'.';}
 function fullCtx(){
 var s='MEMORIA PERMANENTE DEL USUARIO (pares clave:valor):\n'+(DB.memoryPairs.map(function(p){return p.key+': '+p.value;}).join('\n')||'(vacía)');
@@ -560,7 +604,10 @@ s+='\nCategorías: '+getAllCats().map(function(c){return c.name;}).join(', ');
 if(weather)s+='\nClima actual del usuario: '+weather.place+', '+weather.temp+' grados, humedad '+weather.hum+' por ciento, UV '+weather.uv+'.';
 return s;
 }
+/* v13.2 · lastLocalKind distingue consultas personales de hallazgos genéricos */
+var lastLocalKind='';
 function localChat(q){
+lastLocalKind='personal';
 var nq=norm(q);
 var mem=memAnswer(q);if(mem)return mem;
 if(/ayuda|que puedes hacer|que sabes hacer|como funcionas/.test(nq))return '🤖 Soy tu segundo cerebro. Puedo:\n• Responder sobre tus fichas y relacionarlas por etiquetas: "¿Qué sé sobre #coche?".\n• Recordar tus datos: "recuerda que mi coche es un Ford C-Max".\n• Guardar tu posición: "guarda mi posición actual como Casa".\n• Crear fichas: "crea una tarea: llamar al médico mañana".\n• Buscar en internet (modo 🌐 ON): si algo no está en tus datos, lo busco en la web.';
@@ -621,21 +668,36 @@ if(/resum|sintesis/.test(nq))return '📊 Tienes '+DB.ideas.length+' ideas · '+
 var words=norm(q).split(/\s+/).filter(function(w){return w.length>3&&!STOPW[w];});
 var hits2=DB.ideas.filter(function(i){return words.some(function(w){return norm(i.title+' '+(i.content||'')+' '+(i.tags||[]).join(' ')).indexOf(w)>=0;});}).slice(0,5);
 if(hits2.length){
+lastLocalKind='generic'; /* v13.2: hallazgo genérico → no debe bloquear la búsqueda web */
 var conn=[];hits2.forEach(function(i){(i.tags||[]).forEach(function(t){if(conn.indexOf(t)<0)conn.push(t);});});
 return '🔎 Encontré '+hits2.length+' idea(s) relacionada(s):\n'+hits2.map(function(i){return '• '+i.emoji+' '+i.title+' — '+(i.content||'').slice(0,70);}).join('\n')+(conn.length?'\n🔗 Etiquetas que las conectan: '+conn.slice(0,8).map(function(t){return '#'+t;}).join(' '):'');
 }
 return null; /* v13.1: nada en tus datos → el modelo lo busca en internet */
 }
-/* v13.1 · CORREGIDO · El asistente busca con el modelo seleccionado.
-   Cadena: 1º modelo + búsqueda web oficial (tools) → 2º modelo a secas
-   → 3º mensaje con el ERROR REAL. Ya NO añade ":online" al modelo. */
+/* v13.2 · CORREGIDO DE RAÍZ:
+1) Con Internet ON, un hallazgo local YA NO bloquea al modelo: se aporta
+como contexto y se busca en la web igualmente.
+2) Solo las consultas personales (agenda, memoria, fichas…) se quedan en
+local, y solo si no piden expresamente buscar fuera.
+3) Cadena web: OpenRouter oficial → si falla (p.ej. sin créditos),
+Wikipedia gratis + modelo → modelo a secas. Sin respuestas vacías.
+4) Instrucción explícita de PROFUNDIDAD (antes pedía respuestas breves). */
 function aiChatFull(history,useWeb){
 var lastQ=history[history.length-1]?history[history.length-1].content:'';
-/* primero: comandos y datos locales */
+lastLocalKind='';
 var local=localChat(lastQ);
+var nq=norm(lastQ);
+var webIntent=/(internet|en la web|online|notici|novedad|actualidad|ultima hora|busca en|busca fuera|buscame|búscame|quien es|quién es|que es|qué es|precio|cuanto cuesta|cuánto cuesta|cotizacion|eleccion|resultados?|estren|compara|mejores |top |review|opinione|tiempo en|clima en|poblacion|capital de|presidente)/.test(nq);
+if(!DB.settings.apiKey){
 if(local)return Promise.resolve({text:local,src:'local'});
-if(!DB.settings.apiKey)return Promise.resolve({text:'🌐 No he encontrado eso en tus datos. Para buscar en internet necesito tu clave de OpenRouter (Ajustes → IA). Si no tienes créditos, elige un modelo 🆓 gratuito.',src:'local'});
-var sysContent=sysPrompt()+'\n'+fullCtx()+'\nIMPORTANTE: responde SIEMPRE a la pregunta del usuario. Si la respuesta no está en sus datos, búscala en internet y responde igualmente, de forma breve.';
+return Promise.resolve({text:'🌐 No he encontrado eso en tus datos. Para buscar en internet necesito tu clave de OpenRouter (Ajustes → IA). Con modelos 🆓 gratuitos la app usa búsqueda gratuita automáticamente.',src:'local'});
+}
+/* Preguntas sobre TUS datos (agenda, memoria, fichas…) → local, salvo petición expresa de internet */
+if(local&&lastLocalKind==='personal'&&!webIntent)return Promise.resolve({text:local,src:'local'});
+/* Internet OFF → el hallazgo local basta */
+if(local&&!useWeb)return Promise.resolve({text:local,src:'local'});
+/* resto → SIEMPRE al modelo; con web si está activada */
+var sysContent=sysPrompt()+'\n'+fullCtx()+(local?'\n\nDATOS RELACIONADOS DE SUS FICHAS (complétalos con información externa, no los repitas sin más):\n'+local:'')+(useWeb?'\n\nINSTRUCCIÓN CLAVE: NO te limites a tu conocimiento interno ni a sus fichas. Usa la búsqueda web y cualquier dato de internet incluido abajo. Responde EN PROFUNDIDAD: contexto, datos y cifras concretas, ejemplos e implicaciones, citando fuentes con URLs. Desarrolla 150-300 palabras si el tema lo permite; prohibido quedarse en la superficie.':'\n\nResponde SIEMPRE a la pregunta del usuario, aunque no esté en sus datos.');
 var msgs=[{role:'system',content:sysContent}].concat(history);
 var model=DB.settings.model;
 function handle(t,src){
@@ -646,15 +708,17 @@ function handleErr(err){
 var msg=(err&&err.message)?err.message:'error desconocido';
 return{text:'⚠️ No pude obtener respuesta de la IA («'+msg+'»). Revisa la clave, el modelo seleccionado en Ajustes → IA y tu conexión.',src:'error'};
 }
-/* 1º intento: modelo seleccionado con búsqueda web oficial */
 if(useWeb){
-return openrouter(msgs,model,[{type:'openrouter:web_search'}])
-.then(function(t){return handle(t,'openrouter · web');})
+/* 1º intento: búsqueda web oficial de OpenRouter */
+return openrouterWeb(msgs,model)
+.then(function(t){return handle(t,'🌐 web · OpenRouter');})
 .catch(function(){
-/* 2º intento: el modelo a secas (por si el modelo no soporta web) */
-return openrouter(msgs,model,null)
-.then(function(t){return handle(t,'openrouter');})
-.catch(handleErr);
+/* 2º intento: búsqueda web GRATUITA (Wikipedia) inyectada al modelo */
+return webSearchFree(lastQ).then(function(webCtx){
+if(!webCtx)return openrouter(msgs,model,null).then(function(t){return handle(t,'openrouter');}).catch(handleErr);
+var msgs2=[{role:'system',content:sysContent+'\n\nDATOS REALES ENCONTRADOS EN INTERNET:\n'+webCtx+'\n\nBasándote en estos datos reales, responde en profundidad y cita las fuentes.'}].concat(history);
+return openrouter(msgs2,model,null).then(function(t){return handle(t,'🌐 web gratuita');}).catch(handleErr);
+});
 });
 }
 return openrouter(msgs,model,null).then(function(t){return handle(t,'openrouter');}).catch(handleErr);
