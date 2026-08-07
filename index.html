@@ -3,26 +3,10 @@
 <head>
 <!--
 ═══════════════════════════════════════════════════════════════
-IdeaFlow AI · VERSIÓN 13.1 · "Segundo Cerebro por Etiquetas"
-───────────────────────────────────────────────────────────────
-CORRECCIÓN DEFINITIVA v13.1 (solo el asistente, resto intacto):
-PROBLEMA DETECTADO: al preguntar algo que no está en tus datos,
-siempre devolvía "He buscado en tus fichas... y no encuentro eso".
-CAUSA RAÍZ (3 fallos encadenados):
-1) aiChatFull() añadía ":online" al modelo → "modelo:free:online",
-un ID que OpenRouter rechaza con 404 en la mayoría de modelos
-gratuitos. La petición fallaba SIEMPRE.
-2) El .catch() ocultaba el error real y devolvía el mensaje local
-genérico, por eso nunca veías el motivo del fallo.
-3) Los modelos :free por defecto estaban caducados en OpenRouter.
-SOLUCIÓN APLICADA:
-· La búsqueda web usa ahora el método oficial actual de OpenRouter:
-tools:[{type:'openrouter:web_search'}] (el sufijo :online está
-deprecado). Funciona con cualquier modelo.
-· Cadena de respaldo: 1º modelo con búsqueda web → si falla, el
-modelo seleccionado a secas → si falla, muestra el ERROR REAL.
-· openrouter() ahora extrae el mensaje de error real de la API.
-· FREE_MODELS actualizados a modelos vigentes.
+IdeaFlow AI · VERSIÓN 15 · "Segundo Cerebro por Etiquetas"
+Consolida: búsqueda web profunda (sin Tavily), relación fichas↔mapa,
+buscador de localizaciones, chinchetas editables con info y
+creación de alarmas desde el asistente IA.
 ═══════════════════════════════════════════════════════════════
 -->
 <meta charset="UTF-8">
@@ -212,11 +196,10 @@ bosque:{name:'Bosque',bg:'#0c1510',bg2:'#111e15',card:'#152719',card2:'#1c3323',
 var THEME_KEYS=['medianoche','niebla','aurora','atardecer','bosque'];
 var FONTS={inter:{name:'Inter (moderna)',pkg:'inter',css:"'Inter',system-ui,sans-serif"},serif:{name:'Lora (serif)',pkg:'lora',css:"'Lora',Georgia,serif"},mono:{name:'JetBrains Mono',pkg:'jetbrains-mono',css:"'JetBrains Mono',monospace"},rounded:{name:'Nunito (redonda)',pkg:'nunito',css:"'Nunito',system-ui,sans-serif"}};
 var FONT_KEYS=['inter','serif','mono','rounded'];
-/* v13.1 · modelos gratuitos ACTUALIZADOS (los anteriores caducaron en OpenRouter) */
 var FREE_MODELS=['google/gemma-4-31b-it:free','openai/gpt-oss-20b:free','nvidia/nemotron-3-nano-30b-a3b:free','inclusionai/ling-3.0-flash:free','cohere/north-mini-code:free','meta-llama/llama-3.3-70b-instruct:free'];
 var MODELS=['openai/gpt-4o-mini','openai/gpt-4o','anthropic/claude-3.5-sonnet','google/gemini-flash-1.5','google/gemini-2.0-flash-001','meta-llama/llama-3.1-70b-instruct','mistralai/mistral-large'];
 var ACCENTS=['#7c5cff','#22d3ee','#f59e0b','#ef4444','#10b981','#ec4899','#3b82f6','#f97316'];
-var CHIPS=['¿Qué tengo pendiente?','¿Qué sé sobre #coche?','Guarda mi posición actual como Casa','Recuerda que mi coche es un Ford C-Max','¿Cómo me llamo?','Busca en internet: novedades de IA'];
+var CHIPS=['¿Qué tengo pendiente?','¿Qué sé sobre #coche?','Guarda mi posición actual como Casa','Recuerda que mi coche es un Ford C-Max','¿Cómo me llamo?','Busca en internet: novedades de IA','Pon una alarma a las 9 para tomar la medicación'];
 var DBKEY='ideaflow_v2';
 var DAY_NAMES=['L','M','X','J','V','S','D'];
 function uid(){return Math.random().toString(36).slice(2,10)+Date.now().toString(36);}
@@ -421,6 +404,15 @@ return{i:i,shared:shared,score:score};
 .sort(function(a,b){return b.score-a.score;})
 .slice(0,limit||5);
 }
+/* v14 · Relaciona fichas con puntos del mapa */
+function ideasAtLocation(name){
+if(!name)return[];
+var n=norm(name);
+return DB.ideas.filter(function(i){return i.location&&i.location.lat!=null&&norm(i.location.name)===n;});
+}
+function ideasNear(lat,lng,km){
+return DB.ideas.filter(function(i){return i.location&&i.location.lat!=null&&haversine({lat:lat,lng:lng},i.location)<=km;});
+}
 var KEYCATS=[['finanzas','gasto,gaste,pague,precio,euros,sueldo,ingreso,factura,presupuesto,ahorrar,dinero,cobre,venta'],['trabajo','reunion,cliente,proyecto,jefe,informe,deadline,oficina,email,correo,presentacion,equipo,entrega'],['salud','medico,gimnasio,dieta,dormir,yoga,entrenar,meditacion,correr,ansiedad'],['aprendizaje','curso,leer,libro,estudiar,aprender,ingles,tutorial,clase,examen'],['viajes','viaje,vuelo,hotel,maleta,playa,tren,avion,vacaciones,reserva'],['hogar','casa,cocina,limpieza,lavar,reforma,vecino,alquiler'],['compras','comprar,pedido,amazon,tienda,regalo,oferta'],['personal','familia,amigos,pareja,cumpleanos,hobby,personal'],['ideas','idea,concepto,brainstorm,app,negocio,startup,inventar']];
 function extractTimes(t){
 var times=[];var m;
@@ -527,12 +519,9 @@ for(var i=0;i<keys.length;i++){if(nq.indexOf(keys[i])>=0){hits.push(p);break;}}
 if(!hits.length)return null;
 return '🧠 De mi memoria permanente:\n'+hits.map(function(p){return '• '+p.key+': '+p.value;}).join('\n');
 }
-/* ══════════ IA: OpenRouter + respaldo ══════════
-v13.1 · openrouter() acepta tools opcionales (método oficial
-openrouter:web_search) y devuelve el MENSAJE DE ERROR REAL. */
+/* ══════════ IA: OpenRouter + respaldo ══════════ */
 function openrouter(messages,modelOverride,tools){
 if(!DB.settings.apiKey)return Promise.reject(new Error('sin clave API'));
-/* v13.2 · max_tokens: sin límite los modelos gratuitos recortan y "no profundizan" */
 var body={model:modelOverride||DB.settings.model,messages:messages,temperature:0.6,max_tokens:1024};
 if(tools&&tools.length)body.tools=tools;
 return fetch('https://openrouter.ai/api/v1/chat/completions',{method:'POST',headers:{'Authorization':'Bearer '+DB.settings.apiKey,'Content-Type':'application/json','HTTP-Referer':'https://ideaflow.app','X-Title':'IdeaFlow AI'},body:JSON.stringify(body)})
@@ -593,7 +582,7 @@ return fetch('https://es.wikipedia.org/api/rest_v1/page/summary/'+encodeURICompo
 })
 .catch(function(){return '';});
 }
-function sysPrompt(){return 'Eres el asistente de IdeaFlow AI, un segundo cerebro personal con acceso a TODA la información interna del usuario. Relaciona conceptos entre notas mediante etiquetas compartidas. Responde en español, breve, claro y útil. Hoy es '+fmtLong(new Date())+'.';}
+function sysPrompt(){return 'Eres el asistente de IdeaFlow AI, un segundo cerebro personal con acceso a TODA la información interna del usuario. Relaciona conceptos entre notas mediante etiquetas compartidas. Responde en español, claro y útil. Hoy es '+fmtLong(new Date())+'.';}
 function fullCtx(){
 var s='MEMORIA PERMANENTE DEL USUARIO (pares clave:valor):\n'+(DB.memoryPairs.map(function(p){return p.key+': '+p.value;}).join('\n')||'(vacía)');
 s+='\nContexto libre del usuario: '+(DB.settings.memory||'(vacío)');
@@ -610,7 +599,7 @@ function localChat(q){
 lastLocalKind='personal';
 var nq=norm(q);
 var mem=memAnswer(q);if(mem)return mem;
-if(/ayuda|que puedes hacer|que sabes hacer|como funcionas/.test(nq))return '🤖 Soy tu segundo cerebro. Puedo:\n• Responder sobre tus fichas y relacionarlas por etiquetas: "¿Qué sé sobre #coche?".\n• Recordar tus datos: "recuerda que mi coche es un Ford C-Max".\n• Guardar tu posición: "guarda mi posición actual como Casa".\n• Crear fichas: "crea una tarea: llamar al médico mañana".\n• Buscar en internet (modo 🌐 ON): si algo no está en tus datos, lo busco en la web.';
+if(/ayuda|que puedes hacer|que sabes hacer|como funcionas/.test(nq))return '🤖 Soy tu segundo cerebro. Puedo:\n• Responder sobre tus fichas y relacionarlas por etiquetas: "¿Qué sé sobre #coche?".\n• Recordar tus datos: "recuerda que mi coche es un Ford C-Max".\n• Guardar tu posición: "guarda mi posición actual como Casa".\n• Crear fichas: "crea una tarea: llamar al médico mañana".\n• Crear alarmas: "pon una alarma a las 9 para tomar la medicación".\n• Buscar en internet (modo 🌐 ON): si algo no está en tus datos, lo busco en la web.';
 var tagM=q.match(/#([\wáéíóúñü-]+)/i);
 if(tagM){
 var tg=tagM[1].toLowerCase();
@@ -619,7 +608,7 @@ if(notes.length){
 var rel=[];notes.forEach(function(i){(i.tags||[]).forEach(function(t){if(t!==tg&&rel.indexOf(t)<0)rel.push(t);});});
 return '🔗 Todo lo relacionado con #'+tg+' ('+notes.length+' notas conectadas):\n'+notes.slice(0,6).map(function(i){return '• '+i.emoji+' '+i.title+(i.dueDate?' ('+fmtShort(i.dueDate)+')':'');}).join('\n')+(rel.length?'\n🧠 Conceptos que las conectan: '+rel.slice(0,6).map(function(t){return '#'+t;}).join(' '):'');
 }
-return null; /* v13.1: nada local → que lo busque el modelo */
+return null;
 }
 var sobreM=q.match(/(?:qué sé|que se|qué tengo|que tengo|qué sabes|que sabes|relaciona(?:do)?(?:s)?(?: con)?|sobre|acerca de)\s+(.{2,30})/i);
 if(sobreM){
@@ -629,7 +618,7 @@ if(hits.length){
 var allTags=[];hits.forEach(function(i){(i.tags||[]).forEach(function(t){if(allTags.indexOf(t)<0)allTags.push(t);});});
 return '🧠 Lo que sé sobre "'+sobreM[1].trim()+'" ('+hits.length+' notas):\n'+hits.slice(0,6).map(function(i){return '• '+i.emoji+' '+i.title+' — '+(i.content||'').slice(0,60);}).join('\n')+(allTags.length?'\n🔗 Conceptos que las conectan: '+allTags.slice(0,8).map(function(t){return '#'+t;}).join(' '):'');
 }
-return null; /* v13.1: nada local → que lo busque el modelo */
+return null;
 }
 var dm=q.match(/d[oó]nde est[aá]\s+(.{2,30})/i);
 if(dm){
@@ -637,7 +626,7 @@ var tgt=norm(dm[1]).trim();var found=null;
 DB.settings.knownLocations.forEach(function(k){if(!found&&norm(k.name).indexOf(tgt)>=0)found={name:k.name,lat:k.lat,lng:k.lng};});
 if(!found){DB.ideas.forEach(function(i){if(!found&&i.location&&i.location.lat!=null&&(norm(i.location.name).indexOf(tgt)>=0||norm(i.title).indexOf(tgt)>=0))found={name:i.title,lat:i.location.lat,lng:i.location.lng};});}
 if(found)return '📍 "'+found.name+'" está en '+found.lat+', '+found.lng+'. Lo puedes ver en el Mapa.';
-return null; /* v13.1: nada local → que lo busque el modelo */
+return null;
 }
 if(/agenda|calendario|citas|que tengo hoy|que tengo manana|que tengo mañana/.test(nq)){
 var target=todayISO();
@@ -653,7 +642,7 @@ var pend=DB.ideas.filter(function(i){return i.status==='pendiente';});
 if(/pendiente|tarea|por hacer/.test(nq))return pend.length?'📋 Tienes '+pend.length+' pendiente(s):\n'+pend.slice(0,6).map(function(i){return '• '+i.emoji+' '+i.title+(i.dueDate?' (vence '+fmtShort(i.dueDate)+(i.dueTime?' · '+i.dueTime:'')+')':'');}).join('\n'):'🎉 No tienes tareas pendientes.';
 if(/gasto|dinero|finanza|ingreso/.test(nq)){var mo=todayISO().slice(0,7);var ex=0,inc=0;DB.ideas.forEach(function(i){if(i.createdAt.slice(0,7)===mo){if(i.type==='expense')ex+=i.amount||0;if(i.type==='income')inc+=i.amount||0;}});return '💰 Este mes: gastos '+eur(ex)+' · ingresos '+eur(inc)+' · balance '+eur(inc-ex)+'.';}
 if(/alarma/.test(nq))return DB.alarms.length?'⏰ Tus alarmas:\n'+DB.alarms.map(function(a){return '• '+a.name+(a.type==='hora'?' a las '+a.time+(a.repeat==='unica'?' el '+fmtShort(a.date):''):' geolocalizada')+(a.enabled?' (activa)':' (apagada)');}).join('\n'):'No tienes alarmas configuradas. Créalas desde el icono ⏰ de la cabecera.';
-if(/clima|tiempo|temperatura|lluvia/.test(nq))return null; /* v13.1: el clima se consulta al modelo/web */
+if(/clima|tiempo|temperatura|lluvia/.test(nq))return null;
 if(/categor[ií]as?/.test(nq)&&/(cual|cuales|que|lista|tienes)/.test(nq))return '📂 Categorías: '+getAllCats().map(function(c){return c.emoji+' '+c.name;}).join(', ')+'. Puedes crear más en Ajustes → Categorías.';
 if(/etiqueta/.test(nq)&&/(cual|cuales|que|lista|tengo)/.test(nq)){
 var counts={};DB.ideas.forEach(function(i){(i.tags||[]).forEach(function(t){counts[t]=(counts[t]||0)+1;});});
@@ -665,23 +654,29 @@ if(catM){var cid=null;getAllCats().forEach(function(c){if(norm(c.name)===catM[1]
 if(cid){var lst=DB.ideas.filter(function(i){return i.category===cid;});
 if(lst.length)return '🔎 '+lst.length+' ficha(s) de '+catM[1]+':\n'+lst.slice(0,6).map(function(i){return '• '+i.emoji+' '+i.title+' ('+STATUS[i.status].name+')';}).join('\n');}}
 if(/resum|sintesis/.test(nq))return '📊 Tienes '+DB.ideas.length+' ideas · '+DB.ideas.filter(function(i){return i.status==='completado';}).length+' completadas · '+DB.alarms.length+' alarmas · '+DB.memoryPairs.length+' datos en memoria.';
+/* v14 · ¿Qué fichas hay en X punto del mapa? */
+var enM=q.match(/(?:qué hay|que hay|qué tengo|que tengo|qué ideas|que ideas|qué fichas|que fichas|qué notas|que notas)\s+(?:en|cerca de)\s+([a-zñáéíóúü0-9][a-zñáéíóúü0-9 ._-]{1,30})/i);
+if(enM){
+var place=enM[1].trim();
+var atLoc=ideasAtLocation(place);
+var near=[];DB.settings.knownLocations.forEach(function(k){if(norm(k.name)===norm(place)){near=ideasNear(k.lat,k.lng,5);}});
+var merged=atLoc.slice();near.forEach(function(i){if(!merged.some(function(m){return m.id===i.id;}))merged.push(i);});
+if(merged.length){
+return '📍 En "'+place+'" hay '+merged.length+' ficha(s):\n'+merged.slice(0,6).map(function(i){return '• '+i.emoji+' '+i.title+(i.dueDate?' ('+fmtShort(i.dueDate)+')':'');}).join('\n');
+}
+return null;
+}
 var words=norm(q).split(/\s+/).filter(function(w){return w.length>3&&!STOPW[w];});
 var hits2=DB.ideas.filter(function(i){return words.some(function(w){return norm(i.title+' '+(i.content||'')+' '+(i.tags||[]).join(' ')).indexOf(w)>=0;});}).slice(0,5);
 if(hits2.length){
-lastLocalKind='generic'; /* v13.2: hallazgo genérico → no debe bloquear la búsqueda web */
+lastLocalKind='generic'; /* v13.2: hallazgo genérico → no bloquea la búsqueda web */
 var conn=[];hits2.forEach(function(i){(i.tags||[]).forEach(function(t){if(conn.indexOf(t)<0)conn.push(t);});});
 return '🔎 Encontré '+hits2.length+' idea(s) relacionada(s):\n'+hits2.map(function(i){return '• '+i.emoji+' '+i.title+' — '+(i.content||'').slice(0,70);}).join('\n')+(conn.length?'\n🔗 Etiquetas que las conectan: '+conn.slice(0,8).map(function(t){return '#'+t;}).join(' '):'');
 }
-return null; /* v13.1: nada en tus datos → el modelo lo busca en internet */
+return null;
 }
-/* v13.2 · CORREGIDO DE RAÍZ:
-1) Con Internet ON, un hallazgo local YA NO bloquea al modelo: se aporta
-como contexto y se busca en la web igualmente.
-2) Solo las consultas personales (agenda, memoria, fichas…) se quedan en
-local, y solo si no piden expresamente buscar fuera.
-3) Cadena web: OpenRouter oficial → si falla (p.ej. sin créditos),
-Wikipedia gratis + modelo → modelo a secas. Sin respuestas vacías.
-4) Instrucción explícita de PROFUNDIDAD (antes pedía respuestas breves). */
+/* v13.2 · CORREGIDO DE RAÍZ: con Internet ON un hallazgo local ya no
+bloquea al modelo; cadena OpenRouter web → Wikipedia gratis → modelo. */
 function aiChatFull(history,useWeb){
 var lastQ=history[history.length-1]?history[history.length-1].content:'';
 lastLocalKind='';
@@ -692,11 +687,8 @@ if(!DB.settings.apiKey){
 if(local)return Promise.resolve({text:local,src:'local'});
 return Promise.resolve({text:'🌐 No he encontrado eso en tus datos. Para buscar en internet necesito tu clave de OpenRouter (Ajustes → IA). Con modelos 🆓 gratuitos la app usa búsqueda gratuita automáticamente.',src:'local'});
 }
-/* Preguntas sobre TUS datos (agenda, memoria, fichas…) → local, salvo petición expresa de internet */
 if(local&&lastLocalKind==='personal'&&!webIntent)return Promise.resolve({text:local,src:'local'});
-/* Internet OFF → el hallazgo local basta */
 if(local&&!useWeb)return Promise.resolve({text:local,src:'local'});
-/* resto → SIEMPRE al modelo; con web si está activada */
 var sysContent=sysPrompt()+'\n'+fullCtx()+(local?'\n\nDATOS RELACIONADOS DE SUS FICHAS (complétalos con información externa, no los repitas sin más):\n'+local:'')+(useWeb?'\n\nINSTRUCCIÓN CLAVE: NO te limites a tu conocimiento interno ni a sus fichas. Usa la búsqueda web y cualquier dato de internet incluido abajo. Responde EN PROFUNDIDAD: contexto, datos y cifras concretas, ejemplos e implicaciones, citando fuentes con URLs. Desarrolla 150-300 palabras si el tema lo permite; prohibido quedarse en la superficie.':'\n\nResponde SIEMPRE a la pregunta del usuario, aunque no esté en sus datos.');
 var msgs=[{role:'system',content:sysContent}].concat(history);
 var model=DB.settings.model;
@@ -709,11 +701,9 @@ var msg=(err&&err.message)?err.message:'error desconocido';
 return{text:'⚠️ No pude obtener respuesta de la IA («'+msg+'»). Revisa la clave, el modelo seleccionado en Ajustes → IA y tu conexión.',src:'error'};
 }
 if(useWeb){
-/* 1º intento: búsqueda web oficial de OpenRouter */
 return openrouterWeb(msgs,model)
 .then(function(t){return handle(t,'🌐 web · OpenRouter');})
 .catch(function(){
-/* 2º intento: búsqueda web GRATUITA (Wikipedia) inyectada al modelo */
 return webSearchFree(lastQ).then(function(webCtx){
 if(!webCtx)return openrouter(msgs,model,null).then(function(t){return handle(t,'openrouter');}).catch(handleErr);
 var msgs2=[{role:'system',content:sysContent+'\n\nDATOS REALES ENCONTRADOS EN INTERNET:\n'+webCtx+'\n\nBasándote en estos datos reales, responde en profundidad y cita las fuentes.'}].concat(history);
@@ -1438,6 +1428,20 @@ lastPos={lat:p.coords.latitude,lng:p.coords.longitude,ts:Date.now()};
 renderMapContent();toast('📍 Centrado en tu posición');startGeoWatch();
 },function(){toast('Permiso GPS denegado','err');});
 }
+/* v14 · Buscador de localizaciones del mapa (geocodificación gratuita) */
+function mapSearch(){
+var el=document.getElementById('mapSearchInp');var q=el?el.value.trim():'';
+if(!q)return toast('Escribe un lugar para buscar','err');
+toast('🔎 Buscando "'+q+'"…');
+geocode(q).then(function(g){
+if(g){
+MV.lat=g.lat;MV.lng=g.lng;MV.z=15;MV.init=true;
+mapSel=null;
+renderMapContent();
+toast('📍 '+q+' encontrado. Mantén pulsado para guardar el punto.');
+}else{toast('No encontré "'+q+'"','err');}
+});
+}
 function pickName(){return pickMode>=0&&DB.settings.knownLocations[pickMode]?DB.settings.knownLocations[pickMode].name:'';}
 function pickCancel(){pickMode=-1;renderMain();}
 function openSavePoint(lat,lng){
@@ -1455,20 +1459,51 @@ DB.settings.knownLocations.push({name:n,lat:+lat.toFixed(5),lng:+lng.toFixed(5)}
 save();closeOverlay();toast('📍 "'+n+'" guardado como lugar conocido');
 if(view==='mapa')renderMain();
 }
+/* v15 · Chincheta editable con información + fichas relacionadas */
 function openLocEdit(ix){
 var l=DB.settings.knownLocations[ix];if(!l)return;
+var here=ideasAtLocation(l.name);
+var nearL=ideasNear(l.lat,l.lng,3).filter(function(i){return !here.some(function(hi){return hi.id===i.id;});}).slice(0,5);
 var h=ovHead('📍 Editar lugar');
 h+='<div class="lbl">Nombre</div><input class="input" id="locName" value="'+esc(l.name)+'" style="margin-bottom:10px">';
+h+='<div class="lbl">Información del punto</div><textarea class="input" id="locInfo" rows="2" placeholder="Añade información a esta chincheta…" style="margin-bottom:8px">'+esc(l.info||'')+'</textarea>';
 h+='<div class="tiny muted" style="margin-bottom:12px">Coordenadas actuales: '+l.lat+', '+l.lng+'</div>';
 h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
 h+='<button class="btn btn-ghost" style="padding:10px;font-size:11.5px" onclick="locUseGPS('+ix+')">'+ic('locate',13)+' Mover a mi GPS</button>';
 h+='<button class="btn btn-ghost" style="padding:10px;font-size:11.5px" onclick="locPickMode('+ix+')">'+ic('pin',13)+' Tocar en el mapa</button>';
-h+='<button class="btn btn-acc" style="padding:10px;font-size:11.5px" onclick="locRename('+ix+')">'+ic('check',13)+' Guardar nombre</button>';
+h+='<button class="btn btn-acc" style="padding:10px;font-size:11.5px" onclick="locRename('+ix+')">'+ic('check',13)+' Guardar cambios</button>';
 h+='<button class="btn btn-danger" style="padding:10px;font-size:11.5px" onclick="locDelete('+ix+')">'+ic('trash',13)+' Eliminar</button>';
 h+='</div>';
+h+='<button class="btn btn-ghost" style="width:100%;margin-top:10px;padding:10px;font-size:11.5px" onclick="locNewIdea('+ix+')">'+ic('plus',13)+' Crear ficha en este punto</button>';
+if(here.length||nearL.length){
+h+='<div style="margin-top:13px;border-top:1px solid var(--border);padding-top:10px"><div class="tiny" style="font-weight:800;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:7px">🔗 Fichas relacionadas con este punto</div>';
+here.concat(nearL).forEach(function(r){
+h+='<button class="rel-row" onclick="closeOverlay();openEdit(\''+r.id+'\')"><span style="font-size:15px">'+r.emoji+'</span><span style="flex:1;min-width:0;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(r.title)+'</span>'+ic('chevR',12,'var(--muted)')+'</button>';
+});
+h+='</div>';
+}
 openSheet(h);
 }
-function locRename(ix){var el=document.getElementById('locName');var n=el?el.value.trim():'';if(!n)return toast('Nombre vacío','err');DB.settings.knownLocations[ix].name=n;save();toast('💾 Lugar guardado');renderMain();openLocEdit(ix);}
+function locRename(ix){var el=document.getElementById('locName');var n=el?el.value.trim():'';if(!n)return toast('Nombre vacío','err');var inf=document.getElementById('locInfo');DB.settings.knownLocations[ix].name=n;DB.settings.knownLocations[ix].info=inf?inf.value.trim():'';save();toast('💾 Lugar guardado');renderMain();openLocEdit(ix);}
+/* v15 · crear una ficha directamente en un punto del mapa */
+function locNewIdea(ix){
+var l=DB.settings.knownLocations[ix];if(!l)return;
+var h=ovHead('✨ Nueva ficha en '+esc(l.name));
+h+='<textarea class="input" id="locIdeaTxt" rows="4" placeholder="Escribe la idea o nota para este lugar…"></textarea>';
+h+='<button class="btn btn-acc" style="width:100%;margin-top:12px" onclick="locSaveIdea('+ix+')">💾 Guardar ficha aquí</button>';
+openSheet(h);
+}
+function locSaveIdea(ix){
+var l=DB.settings.knownLocations[ix];if(!l)return;
+var el=document.getElementById('locIdeaTxt');var v=el?el.value.trim():'';
+if(!v)return toast('Escribe algo primero','err');
+var an=analyzeText(v);an.title=extractTitle(v);an.content=v;
+an.location={name:l.name,lat:l.lat,lng:l.lng};
+addIdea(an);
+var added=learnFromText(v);if(added.length)toast('🧠 Memoria: '+added[0]);
+toast('📍 Ficha guardada en '+l.name);
+closeOverlay();renderMain();
+}
 function locUseGPS(ix){
 if(!navigator.geolocation)return toast('GPS no disponible','err');
 navigator.geolocation.getCurrentPosition(function(p){
@@ -1492,6 +1527,8 @@ if(confirm('¿Eliminar el lugar "'+n+'"?')){DB.settings.knownLocations.splice(ix
 function viewMap(){
 var nearLoc=null;DB.settings.knownLocations.forEach(function(k2){if(k2.name===mapNear)nearLoc=k2;});
 var h='<div style="display:flex;align-items:center;justify-content:space-between;margin:4px 0 8px"><div style="font-size:20px;font-weight:800">Mapa de ideas</div><span class="tiny muted">Ortofoto · OpenStreetMap</span></div>';
+/* v14 · Buscador de localizaciones */
+h+='<div style="display:flex;gap:7px;margin-bottom:9px"><input class="input" id="mapSearchInp" style="flex:1" placeholder="🔎 Buscar dirección, ciudad o lugar…" onkeydown="if(event.key===\'Enter\')mapSearch()"><button class="btn btn-acc" style="padding:0 13px" onclick="mapSearch()" aria-label="Buscar">'+ic('search',16)+'</button></div>';
 h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:9px"><select class="input" style="flex:1;padding:9px 12px;font-size:12px;font-weight:800;background:var(--card)" onchange="mapSetNear(this.value)"><option value="">🌍 Sin filtro de proximidad</option>';
 DB.settings.knownLocations.forEach(function(k2){h+='<option value="'+esc(k2.name)+'"'+(mapNear===k2.name?' selected':'')+'>📍 Cerca de '+esc(k2.name)+'</option>';});
 h+='</select>'+(nearLoc?'<input type="range" min="0.5" max="20" step="0.5" value="'+mapRadius+'" style="width:78px" oninput="mapSetRadius(this.value)"><span class="tiny" style="font-weight:800;color:var(--muted);width:44px">'+mapRadius+' km</span>':'')+'</div>';
@@ -1504,7 +1541,22 @@ if(mapSel){
 var sel=null;DB.ideas.forEach(function(x){if(x.id===mapSel)sel=x;});
 if(sel){
 var dd2=nearLoc&&sel.location&&sel.location.lat!=null?haversine(nearLoc,sel.location):null;
-h+='<div class="card a-pop" style="display:flex;align-items:center;gap:11px;margin-top:9px"><div class="thumb" style="width:38px;height:38px;background:color-mix(in srgb,'+colorOf(sel)+' 20%,transparent)">'+sel.emoji+'</div><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(sel.title)+'</div><div class="tiny muted">📍 '+esc(sel.location.name)+(dd2!=null?' · '+dd2.toFixed(1)+' km de '+esc(mapNear):'')+'</div></div><button class="btn btn-acc" style="padding:7px 12px;font-size:11px" onclick="openEdit(\''+sel.id+'\')">Abrir</button><button class="icon-btn" onclick="mapSelect(null)">'+ic('x',14)+'</button></div>';
+/* v14 · fichas relacionadas con este punto del mapa */
+var relMap=relatedNotes(sel,4);
+var sameLoc=sel.location?ideasAtLocation(sel.location.name).filter(function(i){return i.id!==sel.id;}).slice(0,4):[];
+h+='<div class="card a-pop" style="margin-top:9px"><div style="display:flex;align-items:center;gap:11px"><div class="thumb" style="width:38px;height:38px;background:color-mix(in srgb,'+colorOf(sel)+' 20%,transparent)">'+sel.emoji+'</div><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(sel.title)+'</div><div class="tiny muted">📍 '+esc(sel.location.name)+(dd2!=null?' · '+dd2.toFixed(1)+' km de '+esc(mapNear):'')+'</div></div><button class="btn btn-acc" style="padding:7px 12px;font-size:11px" onclick="openEdit(\''+sel.id+'\')">Abrir</button><button class="icon-btn" onclick="mapSelect(null)" aria-label="Cerrar">'+ic('x',14)+'</button></div>';
+if(sameLoc.length||relMap.length){
+h+='<div style="border-top:1px solid var(--border);margin-top:10px;padding-top:9px"><div class="tiny" style="font-weight:800;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">🔗 Relacionadas con este punto</div>';
+sameLoc.forEach(function(r){
+h+='<button class="rel-row" onclick="openEdit(\''+r.id+'\')"><span style="font-size:15px">'+r.emoji+'</span><span style="flex:1;min-width:0;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(r.title)+'</span><span class="tiny" style="color:var(--accent);font-weight:700">📍 mismo lugar</span>'+ic('chevR',12,'var(--muted)')+'</button>';
+});
+relMap.forEach(function(r){
+if(sameLoc.some(function(s){return s.id===r.i.id;}))return;
+h+='<button class="rel-row" onclick="openEdit(\''+r.i.id+'\')"><span style="font-size:15px">'+r.i.emoji+'</span><span style="flex:1;min-width:0;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(r.i.title)+'</span>'+(r.shared.length?'<span class="tiny" style="color:var(--accent);font-weight:700">'+r.shared.slice(0,2).map(function(t){return '#'+t;}).join(' ')+'</span>':'')+ic('chevR',12,'var(--muted)')+'</button>';
+});
+h+='</div>';
+}
+h+='</div>';
 }
 }
 return h;
@@ -1905,7 +1957,7 @@ h+=acc('Datos y copias','db',DB.ideas.length,
 '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn btn-ghost" style="flex-direction:column;padding:11px;font-size:11px" onclick="exportJSON()">'+ic('down',15)+'Exportar todo</button><label class="btn btn-ghost" style="flex-direction:column;padding:11px;font-size:11px;cursor:pointer">'+ic('up',15)+'Importar datos<input type="file" accept=".json" style="display:none" onchange="if(this.files[0])importJSON(this.files[0])"></label><button class="btn btn-ghost" style="flex-direction:column;padding:11px;font-size:11px" onclick="snapshot()">'+ic('db',15)+'Instantánea local</button><button class="btn btn-ghost" style="flex-direction:column;padding:11px;font-size:11px" onclick="restoreSnap()">'+ic('refresh',15)+'Restaurar copia</button></div>'+
 '<button class="btn btn-acc" style="width:100%" onclick="doInstall()">📲 Instalar app (pantalla completa)</button>'+
 '<button class="btn btn-danger" style="width:100%" onclick="resetAll()">🗑️ Borrar todos los datos</button>');
-h+='<div class="tiny muted" style="text-align:center;padding:6px 0 4px">IdeaFlow AI v13.1 · Segundo cerebro por etiquetas · OpenRouter · IndexedDB</div>';
+h+='<div class="tiny muted" style="text-align:center;padding:6px 0 4px">IdeaFlow AI v15 · Segundo cerebro por etiquetas · OpenRouter · IndexedDB</div>';
 openSheet(h,true);
 }
 function stToggle(t2){settingsOpen=(settingsOpen===t2)?'':t2;renderSettingsSheet();}
@@ -1980,6 +2032,32 @@ done(p.coords.latitude,p.coords.longitude);
 },function(){respondLocal('No pude leer tu GPS. Concede el permiso de ubicación (🔐 en Ajustes → Revisar permisos) e inténtalo otra vez.');},{enableHighAccuracy:true,timeout:12000});
 }else respondLocal('Este dispositivo no tiene GPS disponible.');
 }
+/* v15 · interpreta y crea alarmas desde el chat del asistente */
+function chatCreateAlarm(q){
+var nq=norm(q);
+if(!/(alarma|recordatorio|recuerdame|recuérdame|avisame|avísame|despiertame|despiértame|ponme una|pon una)/.test(nq))return null;
+var times=extractTimes(q);
+if(!times.length)return null;
+var time=times[0];
+var diasIdx={lunes:0,martes:1,miercoles:2,jueves:3,viernes:4,sabado:5,domingo:6};
+var days=[0,0,0,0,0,0,0];var anyDay=false;
+Object.keys(diasIdx).forEach(function(d){
+if(new RegExp('los '+d+'s?\\b').test(nq)){days[diasIdx[d]]=1;anyDay=true;}
+});
+var name=q.replace(/\b\d{1,2}[:.h]\d{2}\b/g,' ');
+var m=name.match(/(?:para|de|llamad[ao]|con el nombre|:)\s*(.{2,60})/i);
+if(m)name=m[1];
+name=name.replace(/\b(crea|crear|pon|ponme|pone|añade|añadir|agrega|nueva|nuevo|una|un|alarma|alarmas|recordatorio|recuerdame|recuérdame|avisame|avísame|despiertame|despiértame|los|las|el|la|al|a|para|de|del|que|me|hoy|mañana|manana|pasado|lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo)\b/gi,' ');
+name=name.replace(/\b\d{1,2}\b/g,' ').replace(/\s+/g,' ').trim();
+name=name?name.charAt(0).toUpperCase()+name.slice(1):'Alarma '+time;
+if(anyDay){
+DB.alarms.push({id:uid(),type:'hora',name:name,time:time,repeat:'semanal',days:days,enabled:true,lastFired:''});
+return{name:name,time:time,repeat:'semanal'};
+}
+var date=extractDates(q)||todayISO();
+DB.alarms.push({id:uid(),type:'hora',name:name,time:time,date:date,repeat:'unica',days:[0,0,0,0,0,0,0],enabled:true,lastFired:''});
+return{name:name,time:time,date:date,repeat:'unica'};
+}
 function interpretCommand(q){
 var nq=norm(q);
 if(/(guarda|guardar|guarde|salva|marca|registra|apunta).{0,40}(posicion|ubicacion|localizacion|punto|sitio|lugar)/.test(nq)||/(posicion|ubicacion).{0,20}como/.test(nq)){
@@ -1997,6 +2075,13 @@ var mi=q.match(/(?:crea|crear)\s+(?:una?\s+)?(idea|nota|tarea|recordatorio|ficha
 if(mi){
 var idea=captureText(mi[2].trim());
 respondLocal('✅ He interpretado tu ficha y la he guardado correctamente:\n• Título: '+idea.title+'\n• Categoría: '+catOf(idea).emoji+' '+catOf(idea).name+'\n• Estado: '+STATUS[idea.status].name+(idea.dueDate?'\n• Fecha: '+fmtShort(idea.dueDate)+(idea.dueTime?' · '+idea.dueTime+(idea.endTime?'–'+idea.endTime:''):''):'')+(idea.amount?'\n• Importe: '+eur(idea.amount):'')+'\nLa verás en el feed, el tablero y la agenda.');
+return true;
+}
+/* v15 · alarmas creadas por voz/chat */
+var alarm=chatCreateAlarm(q);
+if(alarm){
+save();
+respondLocal('⏰ Alarma creada: "'+alarm.name+'" a las '+alarm.time+(alarm.repeat==='semanal'?' · se repite cada semana':' · el '+fmtShort(alarm.date))+'. Gestiónala desde el icono ⏰ de la cabecera.');
 return true;
 }
 return false;
