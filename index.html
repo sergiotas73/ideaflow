@@ -160,6 +160,973 @@ pre.brief{white-space:pre-wrap;font-family:inherit;font-size:12px;line-height:1.
 .rel-row{width:100%;display:flex;align-items:center;gap:9px;background:var(--card2);border:1px solid var(--border);border-radius:13px;padding:9px 11px;margin-bottom:6px;text-align:left}
 </style>
 </head>
+<script>
+/*
+═══════════════════════════════════════════════════════════════
+IdeaFlow AI · Parche de auditoría v13.2-hardened
+Aplica correcciones de seguridad, privacidad, rendimiento,
+accesibilidad y robustez, salvo la 4.1 (modularización).
+Debe ir en el mismo archivo, después del script principal.
+═══════════════════════════════════════════════════════════════
+*/
+(function () {
+  'use strict';
+
+  if (window.__ideaflowPatchApplied) return;
+  window.__ideaflowPatchApplied = true;
+
+  if (!window.DB || !window.store) return;
+
+  var safeEsc = window.esc || function (s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  };
+
+  /* ─────────────────────────────────────────────
+     1) Accesibilidad: permitir zoom
+  ───────────────────────────────────────────── */
+  try {
+    var vp = document.querySelector('meta[name="viewport"]');
+    if (vp) vp.setAttribute('content', 'width=device-width,initial-scale=1,viewport-fit=cover');
+  } catch (e) {}
+
+  /* ─────────────────────────────────────────────
+     2) CSS fallback y estilos faltantes calendario anual
+  ───────────────────────────────────────────── */
+  try {
+    var patchCss = document.createElement('style');
+    patchCss.textContent =
+      '@supports not (color: color-mix(in srgb, #7c5cff 16%, transparent)) {' +
+      '.tag{background:rgba(124,92,255,.16)}' +
+      '.kcol{background:rgba(22,26,56,.65)}' +
+      '.grad-card{background:linear-gradient(135deg, rgba(124,92,255,.18), var(--card))}' +
+      '} ' +
+      '.mini-month{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:8px;text-align:left} ' +
+      '.mm-t{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-size:10px} ' +
+      '.mm-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px} ' +
+      '.mm-day{height:12px;border-radius:3px;background:var(--border);display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:1px;padding:1px;overflow:hidden} ' +
+      '.mm-day.has{background:var(--accent);opacity:.35} ' +
+      '.mm-sq{width:3px;height:3px;border-radius:1px;display:inline-block}';
+    document.head.appendChild(patchCss);
+  } catch (e) {}
+
+  /* ─────────────────────────────────────────────
+     3) Privacidad: secreto ofuscado separado
+     No es cifrado fuerte, pero evita que la clave,
+     memoria y ubicaciones queden en el JSON principal.
+  ───────────────────────────────────────────── */
+  var SECRET_KEY = window.DBKEY + '_secret';
+  var OBF_KEY = 'IdeaFlowLocalObfuscation_v1';
+
+  function b64EncodeUnicode(str) {
+    return btoa(unescape(encodeURIComponent(str)));
+  }
+
+  function b64DecodeUnicode(str) {
+    return decodeURIComponent(escape(atob(str)));
+  }
+
+  function xorStr(s) {
+    var out = '';
+    for (var i = 0; i < s.length; i++) {
+      out += String.fromCharCode(s.charCodeAt(i) ^ OBF_KEY.charCodeAt(i % OBF_KEY.length));
+    }
+    return out;
+  }
+
+  function getSecret() {
+    try {
+      var raw = localStorage.getItem(SECRET_KEY);
+      if (!raw) return null;
+      if (raw.indexOf('IF_OBF1:') === 0) {
+        return JSON.parse(b64DecodeUnicode(xorStr(raw.slice(8))));
+      }
+      return JSON.parse(raw);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function setSecret(obj) {
+    try {
+      localStorage.setItem(SECRET_KEY, 'IF_OBF1:' + xorStr(b64EncodeUnicode(JSON.stringify(obj))));
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /* ─────────────────────────────────────────────
+     4) store con aviso de fallo y retorno booleano
+  ───────────────────────────────────────────── */
+  var storageWarned = false;
+
+  store.set = function (k, v) {
+    try {
+      localStorage.setItem(k, v);
+      return true;
+    } catch (e) {
+      if (!storageWarned) {
+        storageWarned = true;
+        try { toast('⚠️ Almacenamiento lleno o bloqueado. Exporta una copia.', 'err'); } catch (_) {}
+      }
+      return false;
+    }
+  };
+
+  store.get = function (k) {
+    try {
+      return localStorage.getItem(k);
+    } catch (e) {
+      return null;
+    }
+  };
+
+  store.del = function (k) {
+    try {
+      localStorage.removeItem(k);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
+
+  /* ─────────────────────────────────────────────
+     5) Fetch con timeout global
+  ───────────────────────────────────────────── */
+  if (window.fetch) {
+    var origFetch = window.fetch.bind(window);
+
+    window.fetch = function (input, init) {
+      init = init || {};
+
+      if (!window.AbortController) return origFetch(input, init);
+
+      var timeout = init.timeout || 25000;
+      var ctrl = new AbortController();
+
+      if (init.signal) {
+        try {
+          if (init.signal.aborted) ctrl.abort();
+          else init.signal.addEventListener('abort', function () { ctrl.abort(); });
+        } catch (e) {}
+      }
+
+      init.signal = ctrl.signal;
+      var timer = setTimeout(function () { ctrl.abort(); }, timeout);
+
+      return origFetch(input, init).finally(function () {
+        clearTimeout(timer);
+      });
+    };
+  }
+
+  /* ─────────────────────────────────────────────
+     6) Toasts accesibles con aria-live
+  ───────────────────────────────────────────── */
+  try {
+    var toastsBox = document.getElementById('toasts');
+    if (toastsBox) {
+      toastsBox.setAttribute('aria-live', 'polite');
+      toastsBox.setAttribute('role', 'status');
+    }
+  } catch (e) {}
+
+  var origToast = toast;
+  toast = function (msg, kind) {
+    origToast(msg, kind);
+    try {
+      var box = document.getElementById('toasts');
+      var el = box && box.lastElementChild;
+      if (el) {
+        el.setAttribute('role', kind === 'err' ? 'alert' : 'status');
+        el.setAttribute('tabindex', '-1');
+      }
+    } catch (e) {}
+  };
+
+  /* ─────────────────────────────────────────────
+     7) Validación / saneamiento del DB
+  ───────────────────────────────────────────── */
+  window.aiExternalEnabled = function () {
+    return !!(window.DB && DB.settings && (DB.settings.apiKey || DB.settings.apiProxy));
+  };
+
+  function validateDB() {
+    if (!window.DB || typeof DB !== 'object') {
+      DB = { ideas: [], settings: defaults(), dismissed: [], chat: [], alarms: [], memoryPairs: [] };
+    }
+
+    if (!Array.isArray(DB.ideas)) DB.ideas = [];
+
+    DB.ideas = DB.ideas.filter(function (i) {
+      return i && typeof i.id === 'string';
+    }).map(function (i) {
+      return Object.assign({
+        id: i.id,
+        title: '',
+        content: '',
+        type: 'idea',
+        status: 'pendiente',
+        category: 'ideas',
+        emoji: '💡',
+        tags: [],
+        checklist: [],
+        createdAt: new Date().toISOString(),
+        dueDate: null,
+        startDate: null,
+        dueTime: null,
+        endTime: null,
+        recurrence: '',
+        location: null,
+        audio: null,
+        imageId: null,
+        url: null,
+        amount: null
+      }, i);
+    });
+
+    if (!Array.isArray(DB.dismissed)) DB.dismissed = [];
+    if (!Array.isArray(DB.chat)) DB.chat = [];
+    if (!Array.isArray(DB.alarms)) DB.alarms = [];
+    if (!Array.isArray(DB.memoryPairs)) DB.memoryPairs = [];
+
+    if (!DB.settings || typeof DB.settings !== 'object') DB.settings = defaults();
+
+    var d = defaults();
+    for (var k in d) {
+      if (!(k in DB.settings)) DB.settings[k] = d[k];
+    }
+
+    if (!DB.settings.perms || typeof DB.settings.perms !== 'object') {
+      DB.settings.perms = { notif: false, mic: false, geo: false };
+    }
+
+    if (!Array.isArray(DB.settings.customCats)) DB.settings.customCats = [];
+    if (!Array.isArray(DB.settings.knownLocations)) DB.settings.knownLocations = [];
+    if (typeof DB.settings.aiConsent !== 'boolean') DB.settings.aiConsent = false;
+    if (typeof DB.settings.apiProxy !== 'string') DB.settings.apiProxy = '';
+    if (typeof DB.settings.bubbleOn !== 'boolean') DB.settings.bubbleOn = true;
+  }
+
+  validateDB();
+
+  // Restaurar secretos tras cargar el DB saneado
+  try {
+    var secret = getSecret();
+    if (secret) {
+      if (secret.apiKey) DB.settings.apiKey = secret.apiKey;
+      if (secret.memory) DB.settings.memory = secret.memory;
+      if (Array.isArray(secret.memoryPairs) && secret.memoryPairs.length) DB.memoryPairs = secret.memoryPairs;
+      if (Array.isArray(secret.knownLocations) && secret.knownLocations.length) DB.settings.knownLocations = secret.knownLocations;
+    }
+  } catch (e) {}
+
+  /* ─────────────────────────────────────────────
+     8) Save endurecido: secretos fuera del JSON principal
+  ───────────────────────────────────────────── */
+  var relCache = {};
+  var saveWarned = false;
+  var secretWarned = false;
+
+  save = function () {
+    relCache = {};
+
+    var ok = false;
+    var secretOk = false;
+
+    try {
+      if (!DB.settings.perms) DB.settings.perms = { notif: false, mic: false, geo: false };
+      if (typeof DB.settings.aiConsent !== 'boolean') DB.settings.aiConsent = false;
+      if (typeof DB.settings.apiProxy !== 'string') DB.settings.apiProxy = '';
+
+      var secretObj = {
+        apiKey: DB.settings.apiKey || '',
+        memory: DB.settings.memory || '',
+        memoryPairs: DB.memoryPairs || [],
+        knownLocations: DB.settings.knownLocations || []
+      };
+
+      secretOk = setSecret(secretObj);
+
+      var clone = JSON.parse(JSON.stringify(DB));
+
+      if (secretOk) {
+        clone.settings.apiKey = '';
+        clone.settings.memory = '';
+        clone.memoryPairs = [];
+        clone.settings.knownLocations = [];
+      }
+
+      ok = store.set(DBKEY, JSON.stringify(clone));
+    } catch (e) {
+      ok = false;
+    }
+
+    if (!secretOk && !secretWarned) {
+      secretWarned = true;
+      try { toast('⚠️ No se pudo proteger la memoria local; se guardará sin ofuscar.', 'err'); } catch (_) {}
+    }
+
+    if (secretOk && secretWarned) secretWarned = false;
+
+    if (!ok && !saveWarned) {
+      saveWarned = true;
+      try { toast('⚠️ No se pudieron guardar los datos. Exporta una copia.', 'err'); } catch (_) {}
+    }
+
+    if (ok && saveWarned) {
+      saveWarned = false;
+      try { toast('💾 Almacenamiento recuperado'); } catch (_) {}
+    }
+  };
+
+  /* ─────────────────────────────────────────────
+     9) Caché de relatedNotes para evitar O(n²)
+  ───────────────────────────────────────────── */
+  var origRelatedNotes = relatedNotes;
+
+  relatedNotes = function (idea, limit) {
+    if (!idea) return [];
+
+    var key = [
+      idea.id,
+      idea.title || '',
+      idea.category || '',
+      (idea.tags || []).join(','),
+      DB.ideas.length
+    ].join('|');
+
+    if (relCache[key]) return relCache[key].slice(0, limit || 5);
+
+    var out = origRelatedNotes(idea, 10);
+    relCache[key] = out;
+    return out.slice(0, limit || 5);
+  };
+
+  /* ─────────────────────────────────────────────
+     10) Renderizado enriquecido más seguro
+     Protege URLs antes del render original y luego
+     las restaura con rel noopener noreferrer.
+  ───────────────────────────────────────────── */
+  var origRenderRichText = renderRichText;
+
+  renderRichText = function (t) {
+    var links = [];
+
+    var raw = String(t == null ? '' : t).replace(/https?:\/\/[^\s<)]+/g, function (m) {
+      links.push(m);
+      return '@@IFLINK' + links.length + '@@';
+    });
+
+    var s = origRenderRichText(raw);
+
+    s = s.replace(/@@IFLINK(\d+)@@/g, function (_, i) {
+      var url = safeEsc(links[parseInt(i, 10) - 1] || '');
+      return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + url + '</a>';
+    });
+
+    return s;
+  };
+
+  /* ─────────────────────────────────────────────
+     11) OpenRouter con proxy opcional, consentimiento,
+     timeout y validación de respuesta
+  ───────────────────────────────────────────── */
+  openrouter = function (messages, modelOverride, tools) {
+    if (!DB.settings) return Promise.reject(new Error('Ajustes no disponibles'));
+
+    if (!DB.settings.apiProxy && !DB.settings.apiKey) {
+      return Promise.reject(new Error('sin clave API'));
+    }
+
+    if (aiExternalEnabled() && !DB.settings.aiConsent) {
+      return Promise.reject(new Error('Consentimiento de datos pendiente'));
+    }
+
+    var url = DB.settings.apiProxy && String(DB.settings.apiProxy).trim()
+      ? String(DB.settings.apiProxy).trim()
+      : 'https://openrouter.ai/api/v1/chat/completions';
+
+    var headers = { 'Content-Type': 'application/json' };
+
+    if (!DB.settings.apiProxy) {
+      var ref = 'https://ideaflow.app';
+      try {
+        if (location.origin && location.origin.indexOf('http') === 0) ref = location.origin;
+      } catch (e) {}
+
+      headers['Authorization'] = 'Bearer ' + DB.settings.apiKey;
+      headers['HTTP-Referer'] = ref;
+      headers['X-Title'] = 'IdeaFlow AI';
+    }
+
+    var body = {
+      model: modelOverride || DB.settings.model,
+      messages: messages,
+      temperature: 0.6
+    };
+
+    if (tools && tools.length) body.tools = tools;
+
+    return fetch(url, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(body),
+      timeout: 30000
+    })
+    .then(function (res) {
+      if (!res.ok) {
+        return res.json().catch(function () { return null; }).then(function (j) {
+          var msg = (j && j.error && j.error.message) ? j.error.message : ('HTTP ' + res.status);
+
+          if (res.status === 401) msg = 'Clave inválida o revocada (401).';
+          if (res.status === 402) msg = 'Clave sin créditos (402). Usa un modelo gratuito o añade saldo.';
+          if (res.status === 429) msg = 'Demasiadas solicitudes (429). Espera un momento o cambia de modelo.';
+
+          throw new Error(msg);
+        });
+      }
+      return res.json();
+    })
+    .then(function (j) {
+      if (
+        !j ||
+        !j.choices ||
+        !Array.isArray(j.choices) ||
+        !j.choices[0] ||
+        !j.choices[0].message ||
+        typeof j.choices[0].message.content !== 'string'
+      ) {
+        throw new Error('Respuesta inesperada del modelo');
+      }
+
+      return j.choices[0].message.content;
+    });
+  };
+
+  /* ─────────────────────────────────────────────
+     12) Contexto más corto para no exceder tokens
+  ───────────────────────────────────────────── */
+  fullCtx = function () {
+    try {
+      var mem = (DB.memoryPairs || []).slice(0, 40).map(function (p) {
+        return p.key + ': ' + String(p.value).slice(0, 120);
+      }).join('\n');
+
+      var locs = (DB.settings.knownLocations || []).slice(0, 12).map(function (k) {
+        return k.name;
+      }).join(', ');
+
+      var ideas = DB.ideas.slice(0, 30).map(function (i) {
+        return '[' + i.emoji + ' ' + i.status + '] ' + i.title +
+          ((i.tags && i.tags.length) ? ' #' + i.tags.slice(0, 4).join(' #') : '') +
+          ': ' + String(i.content || '').slice(0, 60);
+      }).join('\n');
+
+      var s = 'MEMORIA PERMANENTE:\n' + mem +
+        '\nContexto libre: ' + String(DB.settings.memory || '').slice(0, 200) +
+        '\nUbicaciones conocidas: ' + locs +
+        '\nFICHAS RELACIONADAS POR ETIQUETAS:\n' + ideas +
+        '\nAlarmas: ' + DB.alarms.slice(0, 10).map(function (a) { return a.name; }).join(', ');
+
+      if (window.weather) {
+        s += '\nClima actual: ' + weather.place + ', ' + weather.temp + ' grados';
+      }
+
+      return s;
+    } catch (e) {
+      return '';
+    }
+  };
+
+  /* ─────────────────────────────────────────────
+     13) Consentimiento en chat si no hay respuesta local
+  ───────────────────────────────────────────── */
+  var origAiChatFull = aiChatFull;
+
+  aiChatFull = function (history, useWeb) {
+    var lastQ = history && history.length ? history[history.length - 1].content : '';
+    var local = localChat(lastQ);
+
+    if (local) return Promise.resolve({ text: local, src: 'local' });
+
+    if (aiExternalEnabled() && !DB.settings.aiConsent) {
+      return Promise.resolve({
+        text: '🔒 Para responder con IA externa necesito tu consentimiento. Puedes activarlo en Ajustes → IA. Mientras tanto, sigo en modo local.',
+        src: 'local'
+      });
+    }
+
+    return origAiChatFull(history, useWeb);
+  };
+
+  /* ─────────────────────────────────────────────
+     14) Confirmación accesible sin window.confirm
+  ───────────────────────────────────────────── */
+  var uiConfirmChoosing = false;
+
+  window.uiConfirm = function (message, opts) {
+    opts = opts || {};
+
+    return new Promise(function (res) {
+      window.__uiConfirmResolve = res;
+
+      var h = ovHead(opts.title || 'Confirmar');
+      h += '<div style="font-size:13.5px;line-height:1.6;color:var(--muted);margin-bottom:16px">' + safeEsc(message) + '</div>';
+      h += '<div style="display:flex;gap:9px">';
+      h += '<button class="btn btn-ghost" style="flex:1" onclick="__uiConfirmChoice(false)">Cancelar</button>';
+      h += '<button class="btn ' + (opts.danger === false ? 'btn-acc' : 'btn-danger') + '" style="flex:1" onclick="__uiConfirmChoice(true)">' + safeEsc(opts.okLabel || 'Sí, continuar') + '</button>';
+      h += '</div>';
+
+      openSheet(h);
+    });
+  };
+
+  window.__uiConfirmChoice = function (ok) {
+    var r = window.__uiConfirmResolve;
+    window.__uiConfirmResolve = null;
+
+    uiConfirmChoosing = true;
+    closeOverlay();
+    uiConfirmChoosing = false;
+
+    if (r) r(ok);
+  };
+
+  var origCloseOverlay = closeOverlay;
+
+  closeOverlay = function () {
+    if (window.__uiConfirmResolve && !uiConfirmChoosing) {
+      var r = window.__uiConfirmResolve;
+      window.__uiConfirmResolve = null;
+      origCloseOverlay();
+      r(false);
+      return;
+    }
+
+    origCloseOverlay();
+  };
+
+  window.confirm = function () {
+    try { toast('Confirmación nativa deshabilitada por accesibilidad', 'err'); } catch (e) {}
+    return false;
+  };
+
+  /* ─────────────────────────────────────────────
+     15) Requerir consentimiento para IA externa
+  ───────────────────────────────────────────── */
+  window.requireAiConsent = function () {
+    if (!aiExternalEnabled() || DB.settings.aiConsent) return Promise.resolve(true);
+
+    return uiConfirm(
+      'Para usar IA externa, tus consultas y parte de tu contexto se enviarán a OpenRouter o a tu proxy. ¿Permites este envío de datos?',
+      { title: '🔒 Privacidad IA', okLabel: 'Permitir' }
+    ).then(function (ok) {
+      if (ok) {
+        DB.settings.aiConsent = true;
+        save();
+      }
+      return ok;
+    });
+  };
+
+  window.reviewAiConsent = function () {
+    requireAiConsent().then(function () {
+      renderSettingsSheet();
+    });
+  };
+
+  /* ─────────────────────────────────────────────
+     16) Funciones IA que piden consentimiento antes
+  ───────────────────────────────────────────── */
+  var origGenBriefing = genBriefing;
+  genBriefing = function () {
+    requireAiConsent().then(function () {
+      origGenBriefing();
+    });
+  };
+
+  var origGenWeekly = genWeekly;
+  genWeekly = function () {
+    requireAiConsent().then(function () {
+      origGenWeekly();
+    });
+  };
+
+  var origGSummarize = gSummarize;
+  gSummarize = function () {
+    requireAiConsent().then(function () {
+      origGSummarize();
+    });
+  };
+
+  var origCapOCR = capOCR;
+  capOCR = function () {
+    requireAiConsent().then(function () {
+      origCapOCR();
+    });
+  };
+
+  var origCapVision = capVision;
+  capVision = function () {
+    requireAiConsent().then(function () {
+      origCapVision();
+    });
+  };
+
+  var origStTestKey = stTestKey;
+  stTestKey = function () {
+    requireAiConsent().then(function (ok) {
+      if (ok) origStTestKey();
+      else toast('Consentimiento necesario para probar la clave', 'err');
+    });
+  };
+
+  /* ─────────────────────────────────────────────
+     17) Validación de imágenes antes de IndexedDB
+  ───────────────────────────────────────────── */
+  function validImageFile(f) {
+    if (!f) return false;
+
+    if (!f.type || f.type.indexOf('image/') !== 0) {
+      toast('Solo se permiten imágenes', 'err');
+      return false;
+    }
+
+    if (f.size > 10 * 1024 * 1024) {
+      toast('Imagen demasiado grande (máx 10 MB)', 'err');
+      return false;
+    }
+
+    return true;
+  }
+
+  var origCapFile = capFile;
+  capFile = function (inp) {
+    var f = inp && inp.files && inp.files[0];
+    if (!validImageFile(f)) {
+      if (inp) inp.value = '';
+      return;
+    }
+    origCapFile(inp);
+  };
+
+  var origEAttachImg = eAttachImg;
+  eAttachImg = function (inp) {
+    var f = inp && inp.files && inp.files[0];
+    if (!validImageFile(f)) {
+      if (inp) inp.value = '';
+      return;
+    }
+    origEAttachImg(inp);
+  };
+
+  /* ─────────────────────────────────────────────
+     18) Sustitución de confirm() en acciones destructivas
+  ───────────────────────────────────────────── */
+  editDelete = function () {
+    if (!window.editDraft) return;
+
+    var id = editDraft.id;
+
+    uiConfirm('¿Eliminar esta idea?', { okLabel: 'Eliminar' }).then(function (ok) {
+      if (ok) {
+        closeOverlay();
+        deleteIdea(id);
+        renderAll();
+      } else {
+        openEdit(id);
+      }
+    });
+  };
+
+  locDelete = function (ix) {
+    var l = DB.settings.knownLocations[ix];
+    if (!l) return;
+
+    uiConfirm('¿Eliminar el lugar "' + l.name + '"?', { okLabel: 'Eliminar' }).then(function (ok) {
+      if (ok) {
+        DB.settings.knownLocations.splice(ix, 1);
+        save();
+        closeOverlay();
+        renderMain();
+        toast('Lugar eliminado');
+      } else {
+        openLocEdit(ix);
+      }
+    });
+  };
+
+  resetAll = function () {
+    uiConfirm('¿Borrar TODOS los datos y empezar de cero?', { okLabel: 'Borrar todo' }).then(function (ok) {
+      if (ok) {
+        try {
+          localStorage.removeItem(DBKEY);
+          localStorage.removeItem(DBKEY + '_snap');
+          localStorage.removeItem(SECRET_KEY);
+        } catch (e) {}
+
+        DB = {
+          ideas: [],
+          settings: defaults(),
+          dismissed: [],
+          chat: [],
+          alarms: [],
+          memoryPairs: []
+        };
+
+        save();
+        applyTheme();
+        closeOverlay();
+        renderAll();
+        toast('🧹 Datos borrados');
+      } else {
+        openSettings();
+      }
+    });
+  };
+
+  var origAlarmDel = alarmDel;
+  alarmDel = function (ix) {
+    uiConfirm('¿Eliminar esta alarma?', { okLabel: 'Eliminar' }).then(function (ok) {
+      if (ok) {
+        origAlarmDel(ix);
+        syncGeoWatch();
+      } else {
+        openAlarms();
+      }
+    });
+  };
+
+  /* ─────────────────────────────────────────────
+     19) Instantánea local ofuscada
+  ───────────────────────────────────────────── */
+  snapshot = function () {
+    try {
+      var data = {
+        ideas: DB.ideas,
+        settings: DB.settings,
+        dismissed: DB.dismissed,
+        chat: DB.chat,
+        alarms: DB.alarms,
+        memoryPairs: DB.memoryPairs,
+        at: new Date().toISOString()
+      };
+
+      localStorage.setItem(DBKEY + '_snap', 'IF_OBF1:' + xorStr(b64EncodeUnicode(JSON.stringify(data))));
+      toast('💾 Instantánea guardada localmente');
+    } catch (e) {
+      toast('No se pudo crear la instantánea', 'err');
+    }
+  };
+
+  restoreSnap = function () {
+    try {
+      var raw = localStorage.getItem(DBKEY + '_snap');
+      if (!raw) return toast('No hay instantánea', 'err');
+
+      var s;
+
+      if (raw.indexOf('IF_OBF1:') === 0) {
+        s = JSON.parse(b64DecodeUnicode(xorStr(raw.slice(8))));
+      } else {
+        s = JSON.parse(raw);
+      }
+
+      if (!s) return toast('No hay instantánea', 'err');
+
+      DB.ideas = s.ideas || [];
+      DB.settings = s.settings || defaults();
+      DB.dismissed = s.dismissed || [];
+      DB.chat = s.chat || [];
+      DB.alarms = s.alarms || [];
+      DB.memoryPairs = s.memoryPairs || [];
+
+      validateDB();
+      save();
+      applyTheme();
+      toast('♻️ Instantánea restaurada');
+      closeOverlay();
+      renderAll();
+    } catch (e) {
+      toast('Error al restaurar', 'err');
+    }
+  };
+
+  /* ─────────────────────────────────────────────
+     20) Rendimiento: detener grafo y GPS cuando no tocan
+  ───────────────────────────────────────────── */
+  function stopGraphLoop() {
+    if (window.G && G.raf) {
+      cancelAnimationFrame(G.raf);
+      G.raf = null;
+    }
+  }
+
+  function geoNeeded() {
+    return !!(
+      window.DB &&
+      (
+        (DB.alarms || []).some(function (a) { return a.enabled && a.type === 'geo'; }) ||
+        window.view === 'mapa'
+      )
+    );
+  }
+
+  function stopGeoWatch() {
+    if (window.geoWatchId != null && navigator.geolocation) {
+      try { navigator.geolocation.clearWatch(window.geoWatchId); } catch (e) {}
+      window.geoWatchId = null;
+    }
+  }
+
+  var origStartGeoWatch = startGeoWatch;
+  startGeoWatch = function () {
+    if (!navigator.geolocation || window.geoWatchId != null || !geoNeeded()) return;
+    origStartGeoWatch();
+  };
+
+  function syncGeoWatch() {
+    if (geoNeeded()) {
+      try { startGeoWatch(); } catch (e) {}
+    } else {
+      stopGeoWatch();
+    }
+  }
+
+  var origSetView = setView;
+  setView = function (v) {
+    if (window.view === 'grafo' && v !== 'grafo') stopGraphLoop();
+
+    syncGeoWatch();
+    origSetView(v);
+    syncGeoWatch();
+
+    if (window.view === 'grafo' && window.G && !G.raf) {
+      try { initGraph(); } catch (e) {}
+    }
+  };
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) {
+      stopGraphLoop();
+      stopGeoWatch();
+    } else {
+      syncGeoWatch();
+      if (window.view === 'grafo') {
+        try { initGraph(); } catch (e) {}
+      }
+    }
+  });
+
+  var origAfSave = afSave;
+  afSave = function () {
+    origAfSave();
+    syncGeoWatch();
+  };
+
+  var origAlarmToggle = alarmToggle;
+  alarmToggle = function (ix) {
+    origAlarmToggle(ix);
+    syncGeoWatch();
+  };
+
+  /* ─────────────────────────────────────────────
+     21) Clima solo si hay permiso de ubicación
+  ───────────────────────────────────────────── */
+  var origFetchWeather = fetchWeather;
+  fetchWeather = function () {
+    if (!DB.settings.perms.geo) {
+      if (window.lastPos && lastPos.lat != null) loadWeather(lastPos.lat, lastPos.lng, false);
+      else loadWeather(40.4168, -3.7038, true);
+      return;
+    }
+
+    origFetchWeather();
+  };
+
+  /* ─────────────────────────────────────────────
+     22) Validar geocodificación
+  ───────────────────────────────────────────── */
+  var origGeocode = geocode;
+  geocode = function (q) {
+    return origGeocode(q).then(function (g) {
+      if (g && Number.isFinite(g.lat) && Number.isFinite(g.lng)) return g;
+      return null;
+    });
+  };
+
+  /* ─────────────────────────────────────────────
+     23) Ajustes → IA: añadir consentimiento y proxy
+  ───────────────────────────────────────────── */
+  var origRenderSettingsSheet = renderSettingsSheet;
+
+  renderSettingsSheet = function () {
+    origRenderSettingsSheet();
+
+    try {
+      if (window.settingsOpen === 'IA') {
+        var body = document.querySelector('.acc-b');
+        if (!body) return;
+
+        var div = document.createElement('div');
+
+        div.innerHTML =
+          '<div class="lbl">Privacidad y proxy</div>' +
+          '<div class="row">Permitir enviar datos a IA externa' +
+          '<button class="tgl' + (DB.settings.aiConsent ? ' on' : '') + '" onclick="toggleAiConsent()" aria-label="Consentimiento IA"><i></i></button>' +
+          '</div>' +
+          '<div class="lbl">Proxy backend opcional</div>' +
+          '<input class="input" placeholder="https://tudominio.com/api/openrouter" value="' + safeEsc(DB.settings.apiProxy || '') + '" onchange="stSetProxy(this.value)">' +
+          '<div class="tiny muted">Si usas proxy, la clave API no sale del navegador. Sin proxy, la clave y la memoria se guardan en una entrada local ofuscada (no es cifrado fuerte).</div>' +
+          '<button class="btn btn-ghost" style="width:100%;padding:10px" onclick="reviewAiConsent()">Revisar consentimiento</button>';
+
+        body.appendChild(div);
+      }
+    } catch (e) {}
+  };
+
+  window.stSetProxy = function (v) {
+    DB.settings.apiProxy = String(v || '').trim();
+    save();
+    toast('Proxy guardado');
+  };
+
+  window.toggleAiConsent = function () {
+    DB.settings.aiConsent = !DB.settings.aiConsent;
+    save();
+    renderSettingsSheet();
+  };
+
+  /* ─────────────────────────────────────────────
+     24) Voces TTS actualizables
+  ───────────────────────────────────────────── */
+  try {
+    if (window.speechSynthesis) {
+      speechSynthesis.onvoiceschanged = function () {
+        if (window.settingsOpen === 'Sonido y voz') {
+          try { renderSettingsSheet(); } catch (e) {}
+        }
+      };
+    }
+  } catch (e) {}
+
+  /* ─────────────────────────────────────────────
+     25) Refresco final
+  ───────────────────────────────────────────── */
+  validateDB();
+  applyTheme();
+  renderAll();
+  renderBubble();
+  syncGeoWatch();
+  save();
+
+})();
+</script>
 <body>
 <div id="splash">
 <div class="slogo"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg></div>
