@@ -3,17 +3,15 @@
 <head>
 <!--
 ═══════════════════════════════════════════════════════════════
-IdeaFlow AI · VERSIÓN 16 · "Sistema Híbrido de Fusión Dual"
+IdeaFlow AI · VERSIÓN 13.2 · "Segundo Cerebro por Etiquetas"
 ───────────────────────────────────────────────────────────────
-MEJORAS IMPLEMENTADAS (sin Tavily, manteniendo OpenRouter):
-1) Eliminación del bloqueo OR de localChat() - Ahora FUSIONA
-   datos locales con búsqueda web (arquitectura AND)
-2) sysPrompt() mejorado con instrucciones de fusión dual,
-   tono empático y profundidad
-3) fullCtx() incluye contexto espacio-temporal (GPS + hora)
-4) max_tokens aumentado a 1500-2000 para respuestas profundas
-5) Detección de intención web mejorada
-6) Instrucciones explícitas de citación de fuentes duales
+v13.2 · Mejoras sobre v13.1:
+1) Renderizado enriquecido del chat del asistente:
+   - **negritas** → NEGRITA
+   - URLs → enlaces clicables (target _blank)
+   - Emojis decorativos según palabras clave
+2) Captura con IA detecta direcciones y hace geocodificación
+   inversa automática para mostrar chincheta en el mapa.
 ═══════════════════════════════════════════════════════════════
 -->
 <meta charset="UTF-8">
@@ -145,6 +143,10 @@ pre.brief{white-space:pre-wrap;font-family:inherit;font-size:12px;line-height:1.
 .msg{max-width:85%;border-radius:16px;padding:10px 14px;font-size:12.5px;line-height:1.55;white-space:pre-wrap;animation:pop .18s ease}
 .msg.u{background:var(--accent);color:var(--accent-ink);border-bottom-right-radius:5px;align-self:flex-end}
 .msg.a{background:var(--card2);border:1px solid var(--border);border-bottom-left-radius:5px;align-self:flex-start;color:var(--text)}
+/* v17 · estilos para el renderizado enriquecido del chat */
+.msg a{color:var(--accent);text-decoration:underline;word-break:break-all}
+.msg strong{color:var(--accent);font-weight:800}
+.msg em{color:var(--muted);font-style:italic}
 .dots span{width:6px;height:6px;border-radius:99px;background:var(--accent);display:inline-block;margin:0 2px;animation:float 1s ease-in-out infinite}
 .ckrow{display:flex;align-items:center;gap:8px;background:var(--card2);border:1px solid var(--border);border-radius:13px;padding:8px 10px;margin-bottom:6px}
 .ckrow input{flex:1;background:transparent;border:none;outline:none;font-size:12.5px;min-width:0;color:var(--text)}
@@ -517,12 +519,10 @@ for(var i=0;i<keys.length;i++){if(nq.indexOf(keys[i])>=0){hits.push(p);break;}}
 if(!hits.length)return null;
 return '🧠 De mi memoria permanente:\n'+hits.map(function(p){return '• '+p.key+': '+p.value;}).join('\n');
 }
-/* ══════════ IA: OpenRouter + respaldo ══════════
-v16 · openrouter() con max_tokens aumentado y tools opcionales */
+/* ══════════ IA: OpenRouter + respaldo ══════════ */
 function openrouter(messages,modelOverride,tools){
 if(!DB.settings.apiKey)return Promise.reject(new Error('sin clave API'));
-/* v16 · max_tokens aumentado a 1500 para respuestas más profundas */
-var body={model:modelOverride||DB.settings.model,messages:messages,temperature:0.6,max_tokens:1500};
+var body={model:modelOverride||DB.settings.model,messages:messages,temperature:0.6};
 if(tools&&tools.length)body.tools=tools;
 return fetch('https://openrouter.ai/api/v1/chat/completions',{method:'POST',headers:{'Authorization':'Bearer '+DB.settings.apiKey,'Content-Type':'application/json','HTTP-Referer':'https://ideaflow.app','X-Title':'IdeaFlow AI'},body:JSON.stringify(body)})
 .then(function(res){
@@ -536,29 +536,11 @@ return res.json();
 })
 .then(function(j){return (j.choices&&j.choices[0]&&j.choices[0].message)?j.choices[0].message.content:'';});
 }
-/* v16 · sysPrompt() MEJORADO con instrucciones de fusión dual, tono empático y profundidad */
-function sysPrompt(){
-return `Eres el asistente de IdeaFlow AI, un segundo cerebro personal inteligente y empático.
-
-INSTRUCCIONES CLAVE:
-1. FUSIÓN DUAL: Combina datos de fichas internas con información de internet de forma natural. No los trates por separado.
-2. PROFUNDIDAD: Desarrolla respuestas de 150-300 palabras cuando el tema lo permita. Evita respuestas cortas o superficiales.
-3. TONO EMPÁTICO: Usa un lenguaje cercano, conversacional y útil. Evita respuestas robóticas o demasiado formales.
-4. CITACIÓN DUAL: Cuando uses datos de fichas, cítalas: [Ficha: "Título"]. Cuando uses fuentes web, inclúyelas con URLs.
-5. CONTRASTACIÓN: Detecta incongruencias entre fichas antiguas y datos actuales. Avisa si algo está desactualizado.
-6. SUGERENCIAS PROACTIVAS: Ofrece acciones como "¿Quieres que cree una ficha con esto?" o "¿Actualizo esta información?"
-7. CONTEXTO ESPACIO-TEMPORAL: Usa la ubicación y hora actuales para contextualizar respuestas.
-
-Hoy es ${fmtLong(new Date())}, ${new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}.`;
-}
-
-/* v16 · fullCtx() MEJORADO con contexto espacio-temporal */
+function sysPrompt(){return 'Eres el asistente de IdeaFlow AI, un segundo cerebro personal con acceso a TODA la información interna del usuario. Relaciona conceptos entre notas mediante etiquetas compartidas. Responde en español, breve, claro y útil. Hoy es '+fmtLong(new Date())+'.';}
 function fullCtx(){
 var s='MEMORIA PERMANENTE DEL USUARIO (pares clave:valor):\n'+(DB.memoryPairs.map(function(p){return p.key+': '+p.value;}).join('\n')||'(vacía)');
 s+='\nContexto libre del usuario: '+(DB.settings.memory||'(vacío)');
 s+='\nUbicaciones conocidas: '+(DB.settings.knownLocations.map(function(k){return k.name+' ('+k.lat+','+k.lng+')';}).join('; ')||'ninguna');
-/* v16 · Añadida ubicación GPS actual */
-if(lastPos&&lastPos.lat){s+='\nUbicación GPS actual: '+lastPos.lat.toFixed(4)+', '+lastPos.lng.toFixed(4)+' (hace '+Math.round((Date.now()-lastPos.ts)/60000)+' minutos)';}
 s+='\nFICHAS/IDEAS GUARDADAS (relaciónalas por etiquetas compartidas):\n'+DB.ideas.slice(0,80).map(function(i){return '['+i.emoji+' '+i.status+'] '+i.title+((i.tags&&i.tags.length)?' #'+i.tags.join(' #'):'')+': '+(i.content||'').slice(0,90);}).join('\n');
 s+='\nAlarmas configuradas: '+(DB.alarms.map(function(a){return a.name+' ('+(a.type==='hora'?a.time:'geo')+(a.enabled?' activa':' apagada')+')';}).join(', ')||'ninguna');
 s+='\nCategorías: '+getAllCats().map(function(c){return c.name;}).join(', ');
@@ -631,29 +613,12 @@ return '🔎 Encontré '+hits2.length+' idea(s) relacionada(s):\n'+hits2.map(fun
 }
 return null;
 }
-/* v16 · CORREGIDO · ARQUITECTURA DE FUSIÓN DUAL (AND en lugar de OR)
-Ahora SIEMPRE llama al modelo, fusionando datos locales con búsqueda web */
 function aiChatFull(history,useWeb){
 var lastQ=history[history.length-1]?history[history.length-1].content:'';
-var nq=norm(lastQ);
-/* v16 · Detección de intención web MEJORADA */
-var webIntent=/(internet|en la web|online|notici|novedad|actualidad|ultima hora|busca en|busca fuera|buscame|búscame|quien es|quién es|que es|qué es|precio|cuanto cuesta|cuánto cuesta|cotizacion|eleccion|resultados?|estren|compara|mejores |top |review|opinione|tiempo en|clima en|poblacion|capital de|presidente|último|reciente|nuevo)/.test(nq);
-/* primero: comandos y datos locales (pero NO bloquean al modelo) */
 var local=localChat(lastQ);
-if(!DB.settings.apiKey){
 if(local)return Promise.resolve({text:local,src:'local'});
-return Promise.resolve({text:'🌐 No he encontrado eso en tus datos. Para buscar en internet necesito tu clave de OpenRouter (Ajustes → IA). Si no tienes créditos, elige un modelo 🆓 gratuito.',src:'local'});
-}
-/* v16 · INSTRUCCIONES DE FUSIÓN DUAL mejoradas */
-var fusionInstruction='';
-if(useWeb&&webIntent){
-fusionInstruction='\n\nINSTRUCCIÓN CLAVE DE FUSIÓN DUAL:\n- Busca información actualizada en internet sobre esta consulta.\n- Combina los datos de internet con las fichas del usuario de forma natural.\n- Si hay fichas relacionadas, cítalas: [Ficha: "Título"] y enriquécelas con datos actuales.\n- Si detectas incongruencias (ej: una ficha dice algo desactualizado), avisa claramente.\n- Cita las fuentes web usadas con URLs.\n- Desarrolla la respuesta en profundidad (150-300 palabras).\n- Usa un tono empático y conversacional, no robótico.';
-}else if(local){
-fusionInstruction='\n\nDATOS RELACIONADOS DE SUS FICHAS:\n'+local+'\n\nINSTRUCCIÓN: Usa estos datos locales como base. Si la pregunta requiere información actualizada o externa, búscala en internet y fusiónala con estos datos. Cita las fichas usadas como [Ficha: "Título"]. Desarrolla en profundidad con tono empático.';
-}else{
-fusionInstruction='\n\nResponde SIEMPRE a la pregunta del usuario con profundidad (150-300 palabras) y tono empático. Si no está en sus datos, búscala en internet.';
-}
-var sysContent=sysPrompt()+'\n'+fullCtx()+fusionInstruction;
+if(!DB.settings.apiKey)return Promise.resolve({text:'🌐 No he encontrado eso en tus datos. Para buscar en internet necesito tu clave de OpenRouter (Ajustes → IA). Si no tienes créditos, elige un modelo 🆓 gratuito.',src:'local'});
+var sysContent=sysPrompt()+'\n'+fullCtx()+'\nIMPORTANTE: responde SIEMPRE a la pregunta del usuario. Si la respuesta no está en sus datos, búscala en internet y responde igualmente, de forma breve.';
 var msgs=[{role:'system',content:sysContent}].concat(history);
 var model=DB.settings.model;
 function handle(t,src){
@@ -664,18 +629,13 @@ function handleErr(err){
 var msg=(err&&err.message)?err.message:'error desconocido';
 return{text:'⚠️ No pude obtener respuesta de la IA («'+msg+'»). Revisa la clave, el modelo seleccionado en Ajustes → IA y tu conexión.',src:'error'};
 }
-/* v16 · Cadena de búsqueda mejorada */
-if(useWeb&&webIntent){
-/* 1º intento: modelo con búsqueda web oficial */
+if(useWeb){
 return openrouter(msgs,model,[{type:'openrouter:web_search'}])
-.then(function(t){return handle(t,'🌐 web · OpenRouter');})
+.then(function(t){return handle(t,'openrouter · web');})
 .catch(function(){
-/* 2º intento: Wikipedia + modelo */
-return webSearchFree(lastQ).then(function(webCtx){
-if(!webCtx)return openrouter(msgs,model,null).then(function(t){return handle(t,'openrouter');}).catch(handleErr);
-var msgs2=[{role:'system',content:sysContent+'\n\nDATOS REALES DE INTERNET:\n'+webCtx+'\n\nUsa estos datos reales junto con las fichas del usuario. Cita fuentes con URLs. Desarrolla en profundidad.'}].concat(history);
-return openrouter(msgs2,model,null).then(function(t){return handle(t,'🌐 web gratuita');}).catch(handleErr);
-});
+return openrouter(msgs,model,null)
+.then(function(t){return handle(t,'openrouter');})
+.catch(handleErr);
 });
 }
 return openrouter(msgs,model,null).then(function(t){return handle(t,'openrouter');}).catch(handleErr);
@@ -1563,7 +1523,42 @@ openSheet(h,false,'','capture');
 }
 function capSetMode(m){stopRecCleanup();capMode=m;renderCapture();}
 function capToggleLocIdx(ix){var n=DB.settings.knownLocations[ix].name;capLocPreset=(capLocPreset===n)?'':n;renderCapture();}
-function capSaveNota(){var el=document.getElementById('capTxt');var v=el?el.value.trim():'';if(!v)return toast('Escribe algo primero','err');captureText(v,capLocPreset?{location:{name:capLocPreset,lat:null,lng:null}}:{});closeOverlay();renderAll();}
+/* v17 · capSaveNota con geocodificación automática de direcciones */
+function capSaveNota(){
+var el=document.getElementById('capTxt');var v=el?el.value.trim():'';
+if(!v)return toast('Escribe algo primero','err');
+/* Si hay preset de ubicación, usarlo directamente */
+if(capLocPreset){
+captureText(v,{location:{name:capLocPreset,lat:null,lng:null}});
+closeOverlay();renderAll();
+return;
+}
+/* Detectar dirección en el texto y geocodificarla automáticamente */
+var addr=null;
+var m1=v.match(/(?:en|direcci[oó]n|lugar|sitio|ubicaci[oó]n|calle|avenida|avda|plaza|paseo)\s+[:\-]?\s*([A-ZÁÉÍÓÚÜÑa-záéíóúüñ0-9][A-ZÁÉÍÓÚÜÑa-záéíóúüñ0-9 .,_-]{4,70})/i);
+if(m1)addr=m1[1].trim();
+else{
+var m2=v.match(/([A-ZÁÉÍÓÚÜÑ][a-záéíóúüñ]{2,}(?:\s+[A-ZÁÉÍÓÚÜÑa-záéíóúüñ]+){1,4},?\s*[A-ZÁÉÍÓÚÜÑ][a-záéíóúüñ]+(?:\s+\d+)?)\b/);
+if(m2)addr=m2[1].trim();
+}
+if(addr){
+toast('🔎 Buscando dirección en el mapa: "'+addr+'"…');
+geocode(addr).then(function(g){
+if(g){
+captureText(v,{location:{name:addr,lat:g.lat,lng:g.lng}});
+MV.lat=g.lat;MV.lng=g.lng;MV.z=Math.max(MV.z,14);MV.init=true;
+toast('📍 Chincheta añadida al mapa: '+addr);
+}else{
+captureText(v,{});
+toast('⚠️ No encontré la dirección, ficha guardada sin ubicación');
+}
+closeOverlay();renderAll();
+});
+}else{
+captureText(v,{});
+closeOverlay();renderAll();
+}
+}
 function capSaveTask(){var el=document.getElementById('capTxt');var v=el?el.value.trim():'';if(!v)return toast('Escribe algo primero','err');var an=analyzeText(v);an.title=extractTitle(v);an.content=v;an.type='task';addIdea(an);if(an.tags.length)toast('🏷️ Etiquetas: '+an.tags.map(function(t){return '#'+t;}).join(' '));toast('☑️ Tarea creada'+(an.dueTime?' · ⏰ '+an.dueTime:''));closeOverlay();renderAll();}
 function capSaveMoney(type){var a=document.getElementById('capAmt'),t2=document.getElementById('capTxt');var amt=parseFloat(a?a.value.replace(',','.'):0);var txt=t2?t2.value.trim():'';if(!amt)return toast('Indica el importe','err');addIdea({title:extractTitle(txt||(type==='expense'?'Gasto':'Ingreso')),content:txt,type:type,amount:Math.abs(amt),category:'finanzas',emoji:type==='expense'?'💸':'💰',tags:['dinero'],status:'completado'});toast((type==='expense'?'💸 Gasto':'💰 Ingreso')+' registrado');closeOverlay();renderAll();}
 function capSaveLink(){var el=document.getElementById('capUrl');var u=el?el.value.trim():'';if(!/^https?:\/\//i.test(u))return toast('URL no válida','err');urlLoading=true;renderCapture();aiUrlMeta(u).then(function(meta){addIdea({title:meta.title||u,content:(meta.desc||'')+'\n'+u,type:'link',url:{url:u,title:meta.title,domain:u.replace(/^https?:\/\//,'').split('/')[0]},category:'aprendizaje',emoji:'🔗',tags:['enlace']});urlLoading=false;toast('🔗 Enlace capturado con metadatos');closeOverlay();renderAll();});}
@@ -1862,7 +1857,7 @@ h+=acc('Datos y copias','db',DB.ideas.length,
 '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn btn-ghost" style="flex-direction:column;padding:11px;font-size:11px" onclick="exportJSON()">'+ic('down',15)+'Exportar todo</button><label class="btn btn-ghost" style="flex-direction:column;padding:11px;font-size:11px;cursor:pointer">'+ic('up',15)+'Importar datos<input type="file" accept=".json" style="display:none" onchange="if(this.files[0])importJSON(this.files[0])"></label><button class="btn btn-ghost" style="flex-direction:column;padding:11px;font-size:11px" onclick="snapshot()">'+ic('db',15)+'Instantánea local</button><button class="btn btn-ghost" style="flex-direction:column;padding:11px;font-size:11px" onclick="restoreSnap()">'+ic('refresh',15)+'Restaurar copia</button></div>'+
 '<button class="btn btn-acc" style="width:100%" onclick="doInstall()">📲 Instalar app (pantalla completa)</button>'+
 '<button class="btn btn-danger" style="width:100%" onclick="resetAll()">🗑️ Borrar todos los datos</button>');
-h+='<div class="tiny muted" style="text-align:center;padding:6px 0 4px">IdeaFlow AI v16 · Sistema Híbrido de Fusión Dual · OpenRouter · IndexedDB</div>';
+h+='<div class="tiny muted" style="text-align:center;padding:6px 0 4px">IdeaFlow AI v13.2 · Segundo cerebro por etiquetas · OpenRouter · IndexedDB</div>';
 openSheet(h,true);
 }
 function stToggle(t2){settingsOpen=(settingsOpen===t2)?'':t2;renderSettingsSheet();}
@@ -1940,7 +1935,7 @@ done(p.coords.latitude,p.coords.longitude);
 function interpretCommand(q){
 var nq=norm(q);
 if(/(guarda|guardar|guarde|salva|marca|registra|apunta).{0,40}(posicion|ubicacion|localizacion|punto|sitio|lugar)/.test(nq)||/(posicion|ubicacion).{0,20}como/.test(nq)){
-var nm=q.match(/(?:como|con el nombre|llamad[ao]|nombre)\s+[""'']?([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9][A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 ._-]{1,30})/i);
+var nm=q.match(/(?:como|con el nombre|llamad[ao]|nombre)\s+[""']?([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9][A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 ._-]{1,30})/i);
 savePosAs(nm?nm[1].trim():'');
 return true;
 }
@@ -1959,6 +1954,33 @@ return true;
 return false;
 }
 function openChat(){renderChat();}
+/* v17 · renderRichText para negritas, enlaces y emojis decorativos */
+function renderRichText(t){
+var s=esc(t);
+s=s.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+s=s.replace(/(^|[\s(])\*([^*\n]+)\*([\s).,!?;:]|$)/g,'$1<em>$2</em>$3');
+s=s.replace(/(https?:\/\/[^\s<)]+)/g,'<a href="$1" target="_blank" rel="noopener">$1</a>');
+var emojis={
+'importante':'⭐','clave':'🔑','atencion':'⚠️','atención':'⚠️','cuidado':'⚠️',
+'error':'❌','correcto':'✅','bien':'✅','perfecto':'✅',
+'idea':'💡','nota':'📝','tarea':'☑️','recordatorio':'⏰','alarm':'⏰',
+'fecha':'📅','tiempo':'⏰','hora':'🕐','dinero':'💰','euro':'💶','precio':'💲',
+'coche':'🚗','viaje':'✈️','vuelo':'✈️','hotel':'🏨','casa':'🏠','hogar':'🏠',
+'familia':'👨‍👩‍👧','trabajo':'💼','proyecto':'📊','negocio':'💼','cliente':'🤝',
+'salud':'🏥','medico':'👨‍⚕️','médico':'👨‍⚕️','gimnasio':'🏋️',
+'comida':'🍽️','restaurante':'🍴','receta':'📖','libro':'📚','lectura':'📖',
+'clima':'🌤️','lluvia':'🌧️','sol':'☀️','musica':'🎵','música':'🎵',
+'pelicula':'🎬','película':'🎬','deporte':'⚽','web':'🌐','internet':'🌐',
+'email':'📧','telefono':'📱','teléfono':'📱','ubicacion':'📍','ubicación':'📍',
+'lugar':'📍','mapa':'🗺️','consejo':'💡','resumen':'📋','ejemplo':'📌',
+'fuente':'📎','enlace':'🔗','paso':'➡️'
+};
+Object.keys(emojis).forEach(function(k){
+var re=new RegExp('(^|[\\s.,;:!?()])('+k+')\\b','gi');
+s=s.replace(re,'$1'+emojis[k]+' $2');
+});
+return s;
+}
 function renderChat(){
 var S=DB.settings;
 var h='';
@@ -1967,7 +1989,11 @@ h+='<div class="hscroll" style="flex-shrink:0;margin-bottom:4px"><button class="
 if(chatRecOn)h+='<div class="tiny" style="flex-shrink:0;color:#ef4444;font-weight:800;display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="width:7px;height:7px;border-radius:99px;background:#ef4444;animation:float 1s ease-in-out infinite"></span> Escuchando… habla: al terminar la frase se envía sola</div>';
 h+='<div id="chatList" style="flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:9px;padding:10px;scrollbar-width:none;background:color-mix(in srgb,var(--bg2) 60%,transparent);border:1px solid var(--border);border-radius:16px">';
 if(!DB.chat.length)h+='<div style="text-align:center;padding:24px 10px;font-size:12.5px;color:var(--muted)"><div style="font-size:30px;margin-bottom:9px">🧠</div>Soy tu segundo cerebro: conozco tus fichas, tus etiquetas y tu memoria.<br>Si algo no está en tus datos, lo busco en internet (modo 🌐 ON).<br>Prueba "¿Qué tiempo hace en Barcelona?" o "novedades de IA".</div>';
-DB.chat.forEach(function(m,mix){h+='<div class="msg '+(m.role==='user'?'u':'a')+'">'+esc(m.content)+(m.role==='assistant'?'<div style="display:flex;gap:8px;margin-top:6px;align-items:center"><button class="tiny" style="font-weight:800;color:var(--accent);display:flex;align-items:center;gap:3px" onclick="speakMsg('+mix+')">'+ic('vol',11)+' Escuchar</button>'+(m.src?'<span class="tiny" style="opacity:.6;font-weight:800;text-transform:uppercase">'+esc(m.src)+'</span>':'')+'</div>':'')+'</div>';});
+/* v17 · aplico renderRichText solo a los mensajes del asistente */
+DB.chat.forEach(function(m,mix){
+var content=(m.role==='assistant')?renderRichText(m.content):esc(m.content);
+h+='<div class="msg '+(m.role==='user'?'u':'a')+'">'+content+(m.role==='assistant'?'<div style="display:flex;gap:8px;margin-top:6px;align-items:center"><button class="tiny" style="font-weight:800;color:var(--accent);display:flex;align-items:center;gap:3px" onclick="speakMsg('+mix+')">'+ic('vol',11)+' Escuchar</button>'+(m.src?'<span class="tiny" style="opacity:.6;font-weight:800;text-transform:uppercase">'+esc(m.src)+'</span>':'')+'</div>':'')+'</div>';
+});
 if(chatLoading)h+='<div class="msg a dots"><span></span><span style="animation-delay:.15s"></span><span style="animation-delay:.3s"></span></div>';
 h+='</div>';
 h+='<div class="hscroll" style="flex-shrink:0;margin:8px -20px 8px;padding:0 20px">'+CHIPS.map(function(c,ix){return '<button class="chip" style="color:var(--accent)" onclick="chatChip('+ix+')">'+esc(c)+'</button>';}).join('')+'</div>';
@@ -2153,27 +2179,6 @@ save();
 try{if('speechSynthesis' in window)speechSynthesis.getVoices();}catch(e){}
 }
 try{boot();}catch(e){fatal(e);}
-
-/* v16 · Búsqueda web GRATUITA (Wikipedia ES) como fallback */
-function webSearchFree(query){
-var u='https://es.wikipedia.org/w/api.php?action=query&list=search&srsearch='+encodeURIComponent(query)+'&srlimit=4&format=json&origin=*';
-return fetch(u)
-.then(function(r){return r.json();})
-.then(function(j){
-var res=(j.query&&j.query.search)||[];
-if(!res.length)return '';
-var list=res.map(function(x){
-var snip=String(x.snippet||'').replace(/<[^>]+>/g,'');
-return '• "'+x.title+'" — '+snip+' (fuente: https://es.wikipedia.org/wiki/'+encodeURIComponent(String(x.title).replace(/ /g,'_'))+')';
-}).join('\n');
-var top=res[0];
-return fetch('https://es.wikipedia.org/api/rest_v1/page/summary/'+encodeURIComponent(String(top.title).replace(/ /g,'_')))
-.then(function(r){return r.json();})
-.then(function(s){return ((s&&s.extract)?('RESUMEN DETALLADO ("'+top.title+'"):\n'+s.extract+'\n\nOTRAS FUENTES:\n'+list):list);})
-.catch(function(){return list;});
-})
-.catch(function(){return '';});
-}
 </script>
 </body>
 </html>
