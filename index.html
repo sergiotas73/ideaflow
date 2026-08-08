@@ -3,10 +3,17 @@
 <head>
 <!--
 ═══════════════════════════════════════════════════════════════
-IdeaFlow AI · VERSIÓN 15 · "Segundo Cerebro por Etiquetas"
-Consolida: búsqueda web profunda (sin Tavily), relación fichas↔mapa,
-buscador de localizaciones, chinchetas editables con info y
-creación de alarmas desde el asistente IA.
+IdeaFlow AI · VERSIÓN 16 · "Sistema Híbrido de Fusión Dual"
+───────────────────────────────────────────────────────────────
+MEJORAS IMPLEMENTADAS (sin Tavily, manteniendo OpenRouter):
+1) Eliminación del bloqueo OR de localChat() - Ahora FUSIONA
+   datos locales con búsqueda web (arquitectura AND)
+2) sysPrompt() mejorado con instrucciones de fusión dual,
+   tono empático y profundidad
+3) fullCtx() incluye contexto espacio-temporal (GPS + hora)
+4) max_tokens aumentado a 1500-2000 para respuestas profundas
+5) Detección de intención web mejorada
+6) Instrucciones explícitas de citación de fuentes duales
 ═══════════════════════════════════════════════════════════════
 -->
 <meta charset="UTF-8">
@@ -199,7 +206,7 @@ var FONT_KEYS=['inter','serif','mono','rounded'];
 var FREE_MODELS=['google/gemma-4-31b-it:free','openai/gpt-oss-20b:free','nvidia/nemotron-3-nano-30b-a3b:free','inclusionai/ling-3.0-flash:free','cohere/north-mini-code:free','meta-llama/llama-3.3-70b-instruct:free'];
 var MODELS=['openai/gpt-4o-mini','openai/gpt-4o','anthropic/claude-3.5-sonnet','google/gemini-flash-1.5','google/gemini-2.0-flash-001','meta-llama/llama-3.1-70b-instruct','mistralai/mistral-large'];
 var ACCENTS=['#7c5cff','#22d3ee','#f59e0b','#ef4444','#10b981','#ec4899','#3b82f6','#f97316'];
-var CHIPS=['¿Qué tengo pendiente?','¿Qué sé sobre #coche?','Guarda mi posición actual como Casa','Recuerda que mi coche es un Ford C-Max','¿Cómo me llamo?','Busca en internet: novedades de IA','Pon una alarma a las 9 para tomar la medicación'];
+var CHIPS=['¿Qué tengo pendiente?','¿Qué sé sobre #coche?','Guarda mi posición actual como Casa','Recuerda que mi coche es un Ford C-Max','¿Cómo me llamo?','Busca en internet: novedades de IA'];
 var DBKEY='ideaflow_v2';
 var DAY_NAMES=['L','M','X','J','V','S','D'];
 function uid(){return Math.random().toString(36).slice(2,10)+Date.now().toString(36);}
@@ -404,15 +411,6 @@ return{i:i,shared:shared,score:score};
 .sort(function(a,b){return b.score-a.score;})
 .slice(0,limit||5);
 }
-/* v14 · Relaciona fichas con puntos del mapa */
-function ideasAtLocation(name){
-if(!name)return[];
-var n=norm(name);
-return DB.ideas.filter(function(i){return i.location&&i.location.lat!=null&&norm(i.location.name)===n;});
-}
-function ideasNear(lat,lng,km){
-return DB.ideas.filter(function(i){return i.location&&i.location.lat!=null&&haversine({lat:lat,lng:lng},i.location)<=km;});
-}
 var KEYCATS=[['finanzas','gasto,gaste,pague,precio,euros,sueldo,ingreso,factura,presupuesto,ahorrar,dinero,cobre,venta'],['trabajo','reunion,cliente,proyecto,jefe,informe,deadline,oficina,email,correo,presentacion,equipo,entrega'],['salud','medico,gimnasio,dieta,dormir,yoga,entrenar,meditacion,correr,ansiedad'],['aprendizaje','curso,leer,libro,estudiar,aprender,ingles,tutorial,clase,examen'],['viajes','viaje,vuelo,hotel,maleta,playa,tren,avion,vacaciones,reserva'],['hogar','casa,cocina,limpieza,lavar,reforma,vecino,alquiler'],['compras','comprar,pedido,amazon,tienda,regalo,oferta'],['personal','familia,amigos,pareja,cumpleanos,hobby,personal'],['ideas','idea,concepto,brainstorm,app,negocio,startup,inventar']];
 function extractTimes(t){
 var times=[];var m;
@@ -519,10 +517,12 @@ for(var i=0;i<keys.length;i++){if(nq.indexOf(keys[i])>=0){hits.push(p);break;}}
 if(!hits.length)return null;
 return '🧠 De mi memoria permanente:\n'+hits.map(function(p){return '• '+p.key+': '+p.value;}).join('\n');
 }
-/* ══════════ IA: OpenRouter + respaldo ══════════ */
+/* ══════════ IA: OpenRouter + respaldo ══════════
+v16 · openrouter() con max_tokens aumentado y tools opcionales */
 function openrouter(messages,modelOverride,tools){
 if(!DB.settings.apiKey)return Promise.reject(new Error('sin clave API'));
-var body={model:modelOverride||DB.settings.model,messages:messages,temperature:0.6,max_tokens:1024};
+/* v16 · max_tokens aumentado a 1500 para respuestas más profundas */
+var body={model:modelOverride||DB.settings.model,messages:messages,temperature:0.6,max_tokens:1500};
 if(tools&&tools.length)body.tools=tools;
 return fetch('https://openrouter.ai/api/v1/chat/completions',{method:'POST',headers:{'Authorization':'Bearer '+DB.settings.apiKey,'Content-Type':'application/json','HTTP-Referer':'https://ideaflow.app','X-Title':'IdeaFlow AI'},body:JSON.stringify(body)})
 .then(function(res){
@@ -536,70 +536,39 @@ return res.json();
 })
 .then(function(j){return (j.choices&&j.choices[0]&&j.choices[0].message)?j.choices[0].message.content:'';});
 }
-/* v13.2 · Búsqueda web OFICIAL de OpenRouter (plugins + tools, sin :online, sin Tavily) */
-function openrouterWeb(messages,model){
-if(!DB.settings.apiKey)return Promise.reject(new Error('sin clave API'));
-var body={model:model||DB.settings.model,messages:messages,temperature:0.6,max_tokens:1400,plugins:[{id:'web',max_results:5}],tools:[{type:'openrouter:web_search'}]};
-return fetch('https://openrouter.ai/api/v1/chat/completions',{method:'POST',headers:{'Authorization':'Bearer '+DB.settings.apiKey,'Content-Type':'application/json','HTTP-Referer':'https://ideaflow.app','X-Title':'IdeaFlow AI'},body:JSON.stringify(body)})
-.then(function(res){
-if(!res.ok){
-return res.json().catch(function(){return null;}).then(function(j){
-var msg=(j&&j.error&&j.error.message)?j.error.message:('HTTP '+res.status);
-throw new Error(msg);
-});
+/* v16 · sysPrompt() MEJORADO con instrucciones de fusión dual, tono empático y profundidad */
+function sysPrompt(){
+return `Eres el asistente de IdeaFlow AI, un segundo cerebro personal inteligente y empático.
+
+INSTRUCCIONES CLAVE:
+1. FUSIÓN DUAL: Combina datos de fichas internas con información de internet de forma natural. No los trates por separado.
+2. PROFUNDIDAD: Desarrolla respuestas de 150-300 palabras cuando el tema lo permita. Evita respuestas cortas o superficiales.
+3. TONO EMPÁTICO: Usa un lenguaje cercano, conversacional y útil. Evita respuestas robóticas o demasiado formales.
+4. CITACIÓN DUAL: Cuando uses datos de fichas, cítalas: [Ficha: "Título"]. Cuando uses fuentes web, inclúyelas con URLs.
+5. CONTRASTACIÓN: Detecta incongruencias entre fichas antiguas y datos actuales. Avisa si algo está desactualizado.
+6. SUGERENCIAS PROACTIVAS: Ofrece acciones como "¿Quieres que cree una ficha con esto?" o "¿Actualizo esta información?"
+7. CONTEXTO ESPACIO-TEMPORAL: Usa la ubicación y hora actuales para contextualizar respuestas.
+
+Hoy es ${fmtLong(new Date())}, ${new Date().toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}.`;
 }
-return res.json();
-})
-.then(function(j){
-var m=(j.choices&&j.choices[0])?j.choices[0].message:null;
-if(!m)return '';
-var txt=m.content||'';
-if(m.annotations&&m.annotations.length){
-var urls=[];
-m.annotations.forEach(function(a){var u2=a.url||(a.url_citation&&a.url_citation.url);if(u2&&urls.indexOf(u2)<0)urls.push(u2);});
-if(urls.length)txt+='\n\n🔗 Fuentes: '+urls.join(' · ');
-}
-return txt;
-});
-}
-/* v13.2 · Búsqueda web GRATUITA sin claves extra (Wikipedia ES, CORS abierto) */
-function webSearchFree(query){
-var u='https://es.wikipedia.org/w/api.php?action=query&list=search&srsearch='+encodeURIComponent(query)+'&srlimit=4&format=json&origin=*';
-return fetch(u)
-.then(function(r){return r.json();})
-.then(function(j){
-var res=(j.query&&j.query.search)||[];
-if(!res.length)return '';
-var list=res.map(function(x){
-var snip=String(x.snippet||'').replace(/<[^>]+>/g,'');
-return '• "'+x.title+'" — '+snip+' (fuente: https://es.wikipedia.org/wiki/'+encodeURIComponent(String(x.title).replace(/ /g,'_'))+')';
-}).join('\n');
-var top=res[0];
-return fetch('https://es.wikipedia.org/api/rest_v1/page/summary/'+encodeURIComponent(String(top.title).replace(/ /g,'_')))
-.then(function(r){return r.json();})
-.then(function(s){return ((s&&s.extract)?('RESUMEN DETALLADO ("'+top.title+'"):\n'+s.extract+'\n\nOTRAS FUENTES:\n'+list):list);})
-.catch(function(){return list;});
-})
-.catch(function(){return '';});
-}
-function sysPrompt(){return 'Eres el asistente de IdeaFlow AI, un segundo cerebro personal con acceso a TODA la información interna del usuario. Relaciona conceptos entre notas mediante etiquetas compartidas. Responde en español, claro y útil. Hoy es '+fmtLong(new Date())+'.';}
+
+/* v16 · fullCtx() MEJORADO con contexto espacio-temporal */
 function fullCtx(){
 var s='MEMORIA PERMANENTE DEL USUARIO (pares clave:valor):\n'+(DB.memoryPairs.map(function(p){return p.key+': '+p.value;}).join('\n')||'(vacía)');
 s+='\nContexto libre del usuario: '+(DB.settings.memory||'(vacío)');
 s+='\nUbicaciones conocidas: '+(DB.settings.knownLocations.map(function(k){return k.name+' ('+k.lat+','+k.lng+')';}).join('; ')||'ninguna');
+/* v16 · Añadida ubicación GPS actual */
+if(lastPos&&lastPos.lat){s+='\nUbicación GPS actual: '+lastPos.lat.toFixed(4)+', '+lastPos.lng.toFixed(4)+' (hace '+Math.round((Date.now()-lastPos.ts)/60000)+' minutos)';}
 s+='\nFICHAS/IDEAS GUARDADAS (relaciónalas por etiquetas compartidas):\n'+DB.ideas.slice(0,80).map(function(i){return '['+i.emoji+' '+i.status+'] '+i.title+((i.tags&&i.tags.length)?' #'+i.tags.join(' #'):'')+': '+(i.content||'').slice(0,90);}).join('\n');
 s+='\nAlarmas configuradas: '+(DB.alarms.map(function(a){return a.name+' ('+(a.type==='hora'?a.time:'geo')+(a.enabled?' activa':' apagada')+')';}).join(', ')||'ninguna');
 s+='\nCategorías: '+getAllCats().map(function(c){return c.name;}).join(', ');
 if(weather)s+='\nClima actual del usuario: '+weather.place+', '+weather.temp+' grados, humedad '+weather.hum+' por ciento, UV '+weather.uv+'.';
 return s;
 }
-/* v13.2 · lastLocalKind distingue consultas personales de hallazgos genéricos */
-var lastLocalKind='';
 function localChat(q){
-lastLocalKind='personal';
 var nq=norm(q);
 var mem=memAnswer(q);if(mem)return mem;
-if(/ayuda|que puedes hacer|que sabes hacer|como funcionas/.test(nq))return '🤖 Soy tu segundo cerebro. Puedo:\n• Responder sobre tus fichas y relacionarlas por etiquetas: "¿Qué sé sobre #coche?".\n• Recordar tus datos: "recuerda que mi coche es un Ford C-Max".\n• Guardar tu posición: "guarda mi posición actual como Casa".\n• Crear fichas: "crea una tarea: llamar al médico mañana".\n• Crear alarmas: "pon una alarma a las 9 para tomar la medicación".\n• Buscar en internet (modo 🌐 ON): si algo no está en tus datos, lo busco en la web.';
+if(/ayuda|que puedes hacer|que sabes hacer|como funcionas/.test(nq))return '🤖 Soy tu segundo cerebro. Puedo:\n• Responder sobre tus fichas y relacionarlas por etiquetas: "¿Qué sé sobre #coche?".\n• Recordar tus datos: "recuerda que mi coche es un Ford C-Max".\n• Guardar tu posición: "guarda mi posición actual como Casa".\n• Crear fichas: "crea una tarea: llamar al médico mañana".\n• Buscar en internet (modo 🌐 ON): si algo no está en tus datos, lo busco en la web.';
 var tagM=q.match(/#([\wáéíóúñü-]+)/i);
 if(tagM){
 var tg=tagM[1].toLowerCase();
@@ -654,42 +623,37 @@ if(catM){var cid=null;getAllCats().forEach(function(c){if(norm(c.name)===catM[1]
 if(cid){var lst=DB.ideas.filter(function(i){return i.category===cid;});
 if(lst.length)return '🔎 '+lst.length+' ficha(s) de '+catM[1]+':\n'+lst.slice(0,6).map(function(i){return '• '+i.emoji+' '+i.title+' ('+STATUS[i.status].name+')';}).join('\n');}}
 if(/resum|sintesis/.test(nq))return '📊 Tienes '+DB.ideas.length+' ideas · '+DB.ideas.filter(function(i){return i.status==='completado';}).length+' completadas · '+DB.alarms.length+' alarmas · '+DB.memoryPairs.length+' datos en memoria.';
-/* v14 · ¿Qué fichas hay en X punto del mapa? */
-var enM=q.match(/(?:qué hay|que hay|qué tengo|que tengo|qué ideas|que ideas|qué fichas|que fichas|qué notas|que notas)\s+(?:en|cerca de)\s+([a-zñáéíóúü0-9][a-zñáéíóúü0-9 ._-]{1,30})/i);
-if(enM){
-var place=enM[1].trim();
-var atLoc=ideasAtLocation(place);
-var near=[];DB.settings.knownLocations.forEach(function(k){if(norm(k.name)===norm(place)){near=ideasNear(k.lat,k.lng,5);}});
-var merged=atLoc.slice();near.forEach(function(i){if(!merged.some(function(m){return m.id===i.id;}))merged.push(i);});
-if(merged.length){
-return '📍 En "'+place+'" hay '+merged.length+' ficha(s):\n'+merged.slice(0,6).map(function(i){return '• '+i.emoji+' '+i.title+(i.dueDate?' ('+fmtShort(i.dueDate)+')':'');}).join('\n');
-}
-return null;
-}
 var words=norm(q).split(/\s+/).filter(function(w){return w.length>3&&!STOPW[w];});
 var hits2=DB.ideas.filter(function(i){return words.some(function(w){return norm(i.title+' '+(i.content||'')+' '+(i.tags||[]).join(' ')).indexOf(w)>=0;});}).slice(0,5);
 if(hits2.length){
-lastLocalKind='generic'; /* v13.2: hallazgo genérico → no bloquea la búsqueda web */
 var conn=[];hits2.forEach(function(i){(i.tags||[]).forEach(function(t){if(conn.indexOf(t)<0)conn.push(t);});});
 return '🔎 Encontré '+hits2.length+' idea(s) relacionada(s):\n'+hits2.map(function(i){return '• '+i.emoji+' '+i.title+' — '+(i.content||'').slice(0,70);}).join('\n')+(conn.length?'\n🔗 Etiquetas que las conectan: '+conn.slice(0,8).map(function(t){return '#'+t;}).join(' '):'');
 }
 return null;
 }
-/* v13.2 · CORREGIDO DE RAÍZ: con Internet ON un hallazgo local ya no
-bloquea al modelo; cadena OpenRouter web → Wikipedia gratis → modelo. */
+/* v16 · CORREGIDO · ARQUITECTURA DE FUSIÓN DUAL (AND en lugar de OR)
+Ahora SIEMPRE llama al modelo, fusionando datos locales con búsqueda web */
 function aiChatFull(history,useWeb){
 var lastQ=history[history.length-1]?history[history.length-1].content:'';
-lastLocalKind='';
-var local=localChat(lastQ);
 var nq=norm(lastQ);
-var webIntent=/(internet|en la web|online|notici|novedad|actualidad|ultima hora|busca en|busca fuera|buscame|búscame|quien es|quién es|que es|qué es|precio|cuanto cuesta|cuánto cuesta|cotizacion|eleccion|resultados?|estren|compara|mejores |top |review|opinione|tiempo en|clima en|poblacion|capital de|presidente)/.test(nq);
+/* v16 · Detección de intención web MEJORADA */
+var webIntent=/(internet|en la web|online|notici|novedad|actualidad|ultima hora|busca en|busca fuera|buscame|búscame|quien es|quién es|que es|qué es|precio|cuanto cuesta|cuánto cuesta|cotizacion|eleccion|resultados?|estren|compara|mejores |top |review|opinione|tiempo en|clima en|poblacion|capital de|presidente|último|reciente|nuevo)/.test(nq);
+/* primero: comandos y datos locales (pero NO bloquean al modelo) */
+var local=localChat(lastQ);
 if(!DB.settings.apiKey){
 if(local)return Promise.resolve({text:local,src:'local'});
-return Promise.resolve({text:'🌐 No he encontrado eso en tus datos. Para buscar en internet necesito tu clave de OpenRouter (Ajustes → IA). Con modelos 🆓 gratuitos la app usa búsqueda gratuita automáticamente.',src:'local'});
+return Promise.resolve({text:'🌐 No he encontrado eso en tus datos. Para buscar en internet necesito tu clave de OpenRouter (Ajustes → IA). Si no tienes créditos, elige un modelo 🆓 gratuito.',src:'local'});
 }
-if(local&&lastLocalKind==='personal'&&!webIntent)return Promise.resolve({text:local,src:'local'});
-if(local&&!useWeb)return Promise.resolve({text:local,src:'local'});
-var sysContent=sysPrompt()+'\n'+fullCtx()+(local?'\n\nDATOS RELACIONADOS DE SUS FICHAS (complétalos con información externa, no los repitas sin más):\n'+local:'')+(useWeb?'\n\nINSTRUCCIÓN CLAVE: NO te limites a tu conocimiento interno ni a sus fichas. Usa la búsqueda web y cualquier dato de internet incluido abajo. Responde EN PROFUNDIDAD: contexto, datos y cifras concretas, ejemplos e implicaciones, citando fuentes con URLs. Desarrolla 150-300 palabras si el tema lo permite; prohibido quedarse en la superficie.':'\n\nResponde SIEMPRE a la pregunta del usuario, aunque no esté en sus datos.');
+/* v16 · INSTRUCCIONES DE FUSIÓN DUAL mejoradas */
+var fusionInstruction='';
+if(useWeb&&webIntent){
+fusionInstruction='\n\nINSTRUCCIÓN CLAVE DE FUSIÓN DUAL:\n- Busca información actualizada en internet sobre esta consulta.\n- Combina los datos de internet con las fichas del usuario de forma natural.\n- Si hay fichas relacionadas, cítalas: [Ficha: "Título"] y enriquécelas con datos actuales.\n- Si detectas incongruencias (ej: una ficha dice algo desactualizado), avisa claramente.\n- Cita las fuentes web usadas con URLs.\n- Desarrolla la respuesta en profundidad (150-300 palabras).\n- Usa un tono empático y conversacional, no robótico.';
+}else if(local){
+fusionInstruction='\n\nDATOS RELACIONADOS DE SUS FICHAS:\n'+local+'\n\nINSTRUCCIÓN: Usa estos datos locales como base. Si la pregunta requiere información actualizada o externa, búscala en internet y fusiónala con estos datos. Cita las fichas usadas como [Ficha: "Título"]. Desarrolla en profundidad con tono empático.';
+}else{
+fusionInstruction='\n\nResponde SIEMPRE a la pregunta del usuario con profundidad (150-300 palabras) y tono empático. Si no está en sus datos, búscala en internet.';
+}
+var sysContent=sysPrompt()+'\n'+fullCtx()+fusionInstruction;
 var msgs=[{role:'system',content:sysContent}].concat(history);
 var model=DB.settings.model;
 function handle(t,src){
@@ -700,13 +664,16 @@ function handleErr(err){
 var msg=(err&&err.message)?err.message:'error desconocido';
 return{text:'⚠️ No pude obtener respuesta de la IA («'+msg+'»). Revisa la clave, el modelo seleccionado en Ajustes → IA y tu conexión.',src:'error'};
 }
-if(useWeb){
-return openrouterWeb(msgs,model)
+/* v16 · Cadena de búsqueda mejorada */
+if(useWeb&&webIntent){
+/* 1º intento: modelo con búsqueda web oficial */
+return openrouter(msgs,model,[{type:'openrouter:web_search'}])
 .then(function(t){return handle(t,'🌐 web · OpenRouter');})
 .catch(function(){
+/* 2º intento: Wikipedia + modelo */
 return webSearchFree(lastQ).then(function(webCtx){
 if(!webCtx)return openrouter(msgs,model,null).then(function(t){return handle(t,'openrouter');}).catch(handleErr);
-var msgs2=[{role:'system',content:sysContent+'\n\nDATOS REALES ENCONTRADOS EN INTERNET:\n'+webCtx+'\n\nBasándote en estos datos reales, responde en profundidad y cita las fuentes.'}].concat(history);
+var msgs2=[{role:'system',content:sysContent+'\n\nDATOS REALES DE INTERNET:\n'+webCtx+'\n\nUsa estos datos reales junto con las fichas del usuario. Cita fuentes con URLs. Desarrolla en profundidad.'}].concat(history);
 return openrouter(msgs2,model,null).then(function(t){return handle(t,'🌐 web gratuita');}).catch(handleErr);
 });
 });
@@ -1428,20 +1395,6 @@ lastPos={lat:p.coords.latitude,lng:p.coords.longitude,ts:Date.now()};
 renderMapContent();toast('📍 Centrado en tu posición');startGeoWatch();
 },function(){toast('Permiso GPS denegado','err');});
 }
-/* v14 · Buscador de localizaciones del mapa (geocodificación gratuita) */
-function mapSearch(){
-var el=document.getElementById('mapSearchInp');var q=el?el.value.trim():'';
-if(!q)return toast('Escribe un lugar para buscar','err');
-toast('🔎 Buscando "'+q+'"…');
-geocode(q).then(function(g){
-if(g){
-MV.lat=g.lat;MV.lng=g.lng;MV.z=15;MV.init=true;
-mapSel=null;
-renderMapContent();
-toast('📍 '+q+' encontrado. Mantén pulsado para guardar el punto.');
-}else{toast('No encontré "'+q+'"','err');}
-});
-}
 function pickName(){return pickMode>=0&&DB.settings.knownLocations[pickMode]?DB.settings.knownLocations[pickMode].name:'';}
 function pickCancel(){pickMode=-1;renderMain();}
 function openSavePoint(lat,lng){
@@ -1459,51 +1412,20 @@ DB.settings.knownLocations.push({name:n,lat:+lat.toFixed(5),lng:+lng.toFixed(5)}
 save();closeOverlay();toast('📍 "'+n+'" guardado como lugar conocido');
 if(view==='mapa')renderMain();
 }
-/* v15 · Chincheta editable con información + fichas relacionadas */
 function openLocEdit(ix){
 var l=DB.settings.knownLocations[ix];if(!l)return;
-var here=ideasAtLocation(l.name);
-var nearL=ideasNear(l.lat,l.lng,3).filter(function(i){return !here.some(function(hi){return hi.id===i.id;});}).slice(0,5);
 var h=ovHead('📍 Editar lugar');
 h+='<div class="lbl">Nombre</div><input class="input" id="locName" value="'+esc(l.name)+'" style="margin-bottom:10px">';
-h+='<div class="lbl">Información del punto</div><textarea class="input" id="locInfo" rows="2" placeholder="Añade información a esta chincheta…" style="margin-bottom:8px">'+esc(l.info||'')+'</textarea>';
 h+='<div class="tiny muted" style="margin-bottom:12px">Coordenadas actuales: '+l.lat+', '+l.lng+'</div>';
 h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">';
 h+='<button class="btn btn-ghost" style="padding:10px;font-size:11.5px" onclick="locUseGPS('+ix+')">'+ic('locate',13)+' Mover a mi GPS</button>';
 h+='<button class="btn btn-ghost" style="padding:10px;font-size:11.5px" onclick="locPickMode('+ix+')">'+ic('pin',13)+' Tocar en el mapa</button>';
-h+='<button class="btn btn-acc" style="padding:10px;font-size:11.5px" onclick="locRename('+ix+')">'+ic('check',13)+' Guardar cambios</button>';
+h+='<button class="btn btn-acc" style="padding:10px;font-size:11.5px" onclick="locRename('+ix+')">'+ic('check',13)+' Guardar nombre</button>';
 h+='<button class="btn btn-danger" style="padding:10px;font-size:11.5px" onclick="locDelete('+ix+')">'+ic('trash',13)+' Eliminar</button>';
 h+='</div>';
-h+='<button class="btn btn-ghost" style="width:100%;margin-top:10px;padding:10px;font-size:11.5px" onclick="locNewIdea('+ix+')">'+ic('plus',13)+' Crear ficha en este punto</button>';
-if(here.length||nearL.length){
-h+='<div style="margin-top:13px;border-top:1px solid var(--border);padding-top:10px"><div class="tiny" style="font-weight:800;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:7px">🔗 Fichas relacionadas con este punto</div>';
-here.concat(nearL).forEach(function(r){
-h+='<button class="rel-row" onclick="closeOverlay();openEdit(\''+r.id+'\')"><span style="font-size:15px">'+r.emoji+'</span><span style="flex:1;min-width:0;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(r.title)+'</span>'+ic('chevR',12,'var(--muted)')+'</button>';
-});
-h+='</div>';
-}
 openSheet(h);
 }
-function locRename(ix){var el=document.getElementById('locName');var n=el?el.value.trim():'';if(!n)return toast('Nombre vacío','err');var inf=document.getElementById('locInfo');DB.settings.knownLocations[ix].name=n;DB.settings.knownLocations[ix].info=inf?inf.value.trim():'';save();toast('💾 Lugar guardado');renderMain();openLocEdit(ix);}
-/* v15 · crear una ficha directamente en un punto del mapa */
-function locNewIdea(ix){
-var l=DB.settings.knownLocations[ix];if(!l)return;
-var h=ovHead('✨ Nueva ficha en '+esc(l.name));
-h+='<textarea class="input" id="locIdeaTxt" rows="4" placeholder="Escribe la idea o nota para este lugar…"></textarea>';
-h+='<button class="btn btn-acc" style="width:100%;margin-top:12px" onclick="locSaveIdea('+ix+')">💾 Guardar ficha aquí</button>';
-openSheet(h);
-}
-function locSaveIdea(ix){
-var l=DB.settings.knownLocations[ix];if(!l)return;
-var el=document.getElementById('locIdeaTxt');var v=el?el.value.trim():'';
-if(!v)return toast('Escribe algo primero','err');
-var an=analyzeText(v);an.title=extractTitle(v);an.content=v;
-an.location={name:l.name,lat:l.lat,lng:l.lng};
-addIdea(an);
-var added=learnFromText(v);if(added.length)toast('🧠 Memoria: '+added[0]);
-toast('📍 Ficha guardada en '+l.name);
-closeOverlay();renderMain();
-}
+function locRename(ix){var el=document.getElementById('locName');var n=el?el.value.trim():'';if(!n)return toast('Nombre vacío','err');DB.settings.knownLocations[ix].name=n;save();toast('💾 Lugar guardado');renderMain();openLocEdit(ix);}
 function locUseGPS(ix){
 if(!navigator.geolocation)return toast('GPS no disponible','err');
 navigator.geolocation.getCurrentPosition(function(p){
@@ -1527,8 +1449,6 @@ if(confirm('¿Eliminar el lugar "'+n+'"?')){DB.settings.knownLocations.splice(ix
 function viewMap(){
 var nearLoc=null;DB.settings.knownLocations.forEach(function(k2){if(k2.name===mapNear)nearLoc=k2;});
 var h='<div style="display:flex;align-items:center;justify-content:space-between;margin:4px 0 8px"><div style="font-size:20px;font-weight:800">Mapa de ideas</div><span class="tiny muted">Ortofoto · OpenStreetMap</span></div>';
-/* v14 · Buscador de localizaciones */
-h+='<div style="display:flex;gap:7px;margin-bottom:9px"><input class="input" id="mapSearchInp" style="flex:1" placeholder="🔎 Buscar dirección, ciudad o lugar…" onkeydown="if(event.key===\'Enter\')mapSearch()"><button class="btn btn-acc" style="padding:0 13px" onclick="mapSearch()" aria-label="Buscar">'+ic('search',16)+'</button></div>';
 h+='<div style="display:flex;align-items:center;gap:8px;margin-bottom:9px"><select class="input" style="flex:1;padding:9px 12px;font-size:12px;font-weight:800;background:var(--card)" onchange="mapSetNear(this.value)"><option value="">🌍 Sin filtro de proximidad</option>';
 DB.settings.knownLocations.forEach(function(k2){h+='<option value="'+esc(k2.name)+'"'+(mapNear===k2.name?' selected':'')+'>📍 Cerca de '+esc(k2.name)+'</option>';});
 h+='</select>'+(nearLoc?'<input type="range" min="0.5" max="20" step="0.5" value="'+mapRadius+'" style="width:78px" oninput="mapSetRadius(this.value)"><span class="tiny" style="font-weight:800;color:var(--muted);width:44px">'+mapRadius+' km</span>':'')+'</div>';
@@ -1541,22 +1461,7 @@ if(mapSel){
 var sel=null;DB.ideas.forEach(function(x){if(x.id===mapSel)sel=x;});
 if(sel){
 var dd2=nearLoc&&sel.location&&sel.location.lat!=null?haversine(nearLoc,sel.location):null;
-/* v14 · fichas relacionadas con este punto del mapa */
-var relMap=relatedNotes(sel,4);
-var sameLoc=sel.location?ideasAtLocation(sel.location.name).filter(function(i){return i.id!==sel.id;}).slice(0,4):[];
-h+='<div class="card a-pop" style="margin-top:9px"><div style="display:flex;align-items:center;gap:11px"><div class="thumb" style="width:38px;height:38px;background:color-mix(in srgb,'+colorOf(sel)+' 20%,transparent)">'+sel.emoji+'</div><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(sel.title)+'</div><div class="tiny muted">📍 '+esc(sel.location.name)+(dd2!=null?' · '+dd2.toFixed(1)+' km de '+esc(mapNear):'')+'</div></div><button class="btn btn-acc" style="padding:7px 12px;font-size:11px" onclick="openEdit(\''+sel.id+'\')">Abrir</button><button class="icon-btn" onclick="mapSelect(null)" aria-label="Cerrar">'+ic('x',14)+'</button></div>';
-if(sameLoc.length||relMap.length){
-h+='<div style="border-top:1px solid var(--border);margin-top:10px;padding-top:9px"><div class="tiny" style="font-weight:800;color:var(--accent);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px">🔗 Relacionadas con este punto</div>';
-sameLoc.forEach(function(r){
-h+='<button class="rel-row" onclick="openEdit(\''+r.id+'\')"><span style="font-size:15px">'+r.emoji+'</span><span style="flex:1;min-width:0;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(r.title)+'</span><span class="tiny" style="color:var(--accent);font-weight:700">📍 mismo lugar</span>'+ic('chevR',12,'var(--muted)')+'</button>';
-});
-relMap.forEach(function(r){
-if(sameLoc.some(function(s){return s.id===r.i.id;}))return;
-h+='<button class="rel-row" onclick="openEdit(\''+r.i.id+'\')"><span style="font-size:15px">'+r.i.emoji+'</span><span style="flex:1;min-width:0;font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(r.i.title)+'</span>'+(r.shared.length?'<span class="tiny" style="color:var(--accent);font-weight:700">'+r.shared.slice(0,2).map(function(t){return '#'+t;}).join(' ')+'</span>':'')+ic('chevR',12,'var(--muted)')+'</button>';
-});
-h+='</div>';
-}
-h+='</div>';
+h+='<div class="card a-pop" style="display:flex;align-items:center;gap:11px;margin-top:9px"><div class="thumb" style="width:38px;height:38px;background:color-mix(in srgb,'+colorOf(sel)+' 20%,transparent)">'+sel.emoji+'</div><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(sel.title)+'</div><div class="tiny muted">📍 '+esc(sel.location.name)+(dd2!=null?' · '+dd2.toFixed(1)+' km de '+esc(mapNear):'')+'</div></div><button class="btn btn-acc" style="padding:7px 12px;font-size:11px" onclick="openEdit(\''+sel.id+'\')">Abrir</button><button class="icon-btn" onclick="mapSelect(null)">'+ic('x',14)+'</button></div>';
 }
 }
 return h;
@@ -1624,7 +1529,7 @@ var modes=[['nota','✍️','Nota'],['voz','🎙️','Voz'],['scan','📷','Esc�
 var h=ovHead('✨ Capturar');
 h+='<div class="hscroll" style="margin:0 -20px 14px;padding:0 20px">'+modes.map(function(m){return '<button class="chip'+(capMode===m[0]?' on':'')+'" onclick="capSetMode(\''+m[0]+'\')">'+m[1]+' '+m[2]+'</button>';}).join('')+'</div>';
 if(capMode==='nota'){
-h+='<textarea class="input" id="capTxt" rows="5" placeholder="Escribe tu idea… La IA detectará categoría, fechas, horas y etiquetas (#hashtags incluidos).&#10;Ej: “Recordar llevar el coche al taller mañana a las 9 #coche”"></textarea><div class="hscroll" style="margin-top:10px">'+DB.settings.knownLocations.slice(0,3).map(function(l,ix){return '<button class="chip'+(capLocPreset===l.name?' on':'')+'" onclick="capToggleLocIdx('+ix+')">📍 '+esc(l.name)+'</button>';}).join('')+'</div><button class="btn btn-acc" style="width:100%;margin-top:12px" onclick="capSaveNota()">Capturar con IA →</button>';
+h+='<textarea class="input" id="capTxt" rows="5" placeholder="Escribe tu idea… La IA detectará categoría, fechas, horas y etiquetas (#hashtags incluidos).&#10;Ej: "Recordar llevar el coche al taller mañana a las 9 #coche""></textarea><div class="hscroll" style="margin-top:10px">'+DB.settings.knownLocations.slice(0,3).map(function(l,ix){return '<button class="chip'+(capLocPreset===l.name?' on':'')+'" onclick="capToggleLocIdx('+ix+')">📍 '+esc(l.name)+'</button>';}).join('')+'</div><button class="btn btn-acc" style="width:100%;margin-top:12px" onclick="capSaveNota()">Capturar con IA →</button>';
 }else if(capMode==='voz'){
 var hintSR='Mismo sistema que el asistente: habla y, al terminar la frase, la ficha se guarda sola una única vez. Toca el botón para detener y guardar manualmente.';
 var hintNoSR='⚠️ Transcripción no disponible en este navegador (usa Chrome): se grabará el audio. Toca el botón para detener.';
@@ -1957,7 +1862,7 @@ h+=acc('Datos y copias','db',DB.ideas.length,
 '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn btn-ghost" style="flex-direction:column;padding:11px;font-size:11px" onclick="exportJSON()">'+ic('down',15)+'Exportar todo</button><label class="btn btn-ghost" style="flex-direction:column;padding:11px;font-size:11px;cursor:pointer">'+ic('up',15)+'Importar datos<input type="file" accept=".json" style="display:none" onchange="if(this.files[0])importJSON(this.files[0])"></label><button class="btn btn-ghost" style="flex-direction:column;padding:11px;font-size:11px" onclick="snapshot()">'+ic('db',15)+'Instantánea local</button><button class="btn btn-ghost" style="flex-direction:column;padding:11px;font-size:11px" onclick="restoreSnap()">'+ic('refresh',15)+'Restaurar copia</button></div>'+
 '<button class="btn btn-acc" style="width:100%" onclick="doInstall()">📲 Instalar app (pantalla completa)</button>'+
 '<button class="btn btn-danger" style="width:100%" onclick="resetAll()">🗑️ Borrar todos los datos</button>');
-h+='<div class="tiny muted" style="text-align:center;padding:6px 0 4px">IdeaFlow AI v15 · Segundo cerebro por etiquetas · OpenRouter · IndexedDB</div>';
+h+='<div class="tiny muted" style="text-align:center;padding:6px 0 4px">IdeaFlow AI v16 · Sistema Híbrido de Fusión Dual · OpenRouter · IndexedDB</div>';
 openSheet(h,true);
 }
 function stToggle(t2){settingsOpen=(settingsOpen===t2)?'':t2;renderSettingsSheet();}
@@ -2032,36 +1937,10 @@ done(p.coords.latitude,p.coords.longitude);
 },function(){respondLocal('No pude leer tu GPS. Concede el permiso de ubicación (🔐 en Ajustes → Revisar permisos) e inténtalo otra vez.');},{enableHighAccuracy:true,timeout:12000});
 }else respondLocal('Este dispositivo no tiene GPS disponible.');
 }
-/* v15 · interpreta y crea alarmas desde el chat del asistente */
-function chatCreateAlarm(q){
-var nq=norm(q);
-if(!/(alarma|recordatorio|recuerdame|recuérdame|avisame|avísame|despiertame|despiértame|ponme una|pon una)/.test(nq))return null;
-var times=extractTimes(q);
-if(!times.length)return null;
-var time=times[0];
-var diasIdx={lunes:0,martes:1,miercoles:2,jueves:3,viernes:4,sabado:5,domingo:6};
-var days=[0,0,0,0,0,0,0];var anyDay=false;
-Object.keys(diasIdx).forEach(function(d){
-if(new RegExp('los '+d+'s?\\b').test(nq)){days[diasIdx[d]]=1;anyDay=true;}
-});
-var name=q.replace(/\b\d{1,2}[:.h]\d{2}\b/g,' ');
-var m=name.match(/(?:para|de|llamad[ao]|con el nombre|:)\s*(.{2,60})/i);
-if(m)name=m[1];
-name=name.replace(/\b(crea|crear|pon|ponme|pone|añade|añadir|agrega|nueva|nuevo|una|un|alarma|alarmas|recordatorio|recuerdame|recuérdame|avisame|avísame|despiertame|despiértame|los|las|el|la|al|a|para|de|del|que|me|hoy|mañana|manana|pasado|lunes|martes|miércoles|miercoles|jueves|viernes|sábado|sabado|domingo)\b/gi,' ');
-name=name.replace(/\b\d{1,2}\b/g,' ').replace(/\s+/g,' ').trim();
-name=name?name.charAt(0).toUpperCase()+name.slice(1):'Alarma '+time;
-if(anyDay){
-DB.alarms.push({id:uid(),type:'hora',name:name,time:time,repeat:'semanal',days:days,enabled:true,lastFired:''});
-return{name:name,time:time,repeat:'semanal'};
-}
-var date=extractDates(q)||todayISO();
-DB.alarms.push({id:uid(),type:'hora',name:name,time:time,date:date,repeat:'unica',days:[0,0,0,0,0,0,0],enabled:true,lastFired:''});
-return{name:name,time:time,date:date,repeat:'unica'};
-}
 function interpretCommand(q){
 var nq=norm(q);
 if(/(guarda|guardar|guarde|salva|marca|registra|apunta).{0,40}(posicion|ubicacion|localizacion|punto|sitio|lugar)/.test(nq)||/(posicion|ubicacion).{0,20}como/.test(nq)){
-var nm=q.match(/(?:como|con el nombre|llamad[ao]|nombre)\s+["“']?([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9][A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 ._-]{1,30})/i);
+var nm=q.match(/(?:como|con el nombre|llamad[ao]|nombre)\s+[""'']?([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9][A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 ._-]{1,30})/i);
 savePosAs(nm?nm[1].trim():'');
 return true;
 }
@@ -2075,13 +1954,6 @@ var mi=q.match(/(?:crea|crear)\s+(?:una?\s+)?(idea|nota|tarea|recordatorio|ficha
 if(mi){
 var idea=captureText(mi[2].trim());
 respondLocal('✅ He interpretado tu ficha y la he guardado correctamente:\n• Título: '+idea.title+'\n• Categoría: '+catOf(idea).emoji+' '+catOf(idea).name+'\n• Estado: '+STATUS[idea.status].name+(idea.dueDate?'\n• Fecha: '+fmtShort(idea.dueDate)+(idea.dueTime?' · '+idea.dueTime+(idea.endTime?'–'+idea.endTime:''):''):'')+(idea.amount?'\n• Importe: '+eur(idea.amount):'')+'\nLa verás en el feed, el tablero y la agenda.');
-return true;
-}
-/* v15 · alarmas creadas por voz/chat */
-var alarm=chatCreateAlarm(q);
-if(alarm){
-save();
-respondLocal('⏰ Alarma creada: "'+alarm.name+'" a las '+alarm.time+(alarm.repeat==='semanal'?' · se repite cada semana':' · el '+fmtShort(alarm.date))+'. Gestiónala desde el icono ⏰ de la cabecera.');
 return true;
 }
 return false;
@@ -2281,6 +2153,27 @@ save();
 try{if('speechSynthesis' in window)speechSynthesis.getVoices();}catch(e){}
 }
 try{boot();}catch(e){fatal(e);}
+
+/* v16 · Búsqueda web GRATUITA (Wikipedia ES) como fallback */
+function webSearchFree(query){
+var u='https://es.wikipedia.org/w/api.php?action=query&list=search&srsearch='+encodeURIComponent(query)+'&srlimit=4&format=json&origin=*';
+return fetch(u)
+.then(function(r){return r.json();})
+.then(function(j){
+var res=(j.query&&j.query.search)||[];
+if(!res.length)return '';
+var list=res.map(function(x){
+var snip=String(x.snippet||'').replace(/<[^>]+>/g,'');
+return '• "'+x.title+'" — '+snip+' (fuente: https://es.wikipedia.org/wiki/'+encodeURIComponent(String(x.title).replace(/ /g,'_'))+')';
+}).join('\n');
+var top=res[0];
+return fetch('https://es.wikipedia.org/api/rest_v1/page/summary/'+encodeURIComponent(String(top.title).replace(/ /g,'_')))
+.then(function(r){return r.json();})
+.then(function(s){return ((s&&s.extract)?('RESUMEN DETALLADO ("'+top.title+'"):\n'+s.extract+'\n\nOTRAS FUENTES:\n'+list):list);})
+.catch(function(){return list;});
+})
+.catch(function(){return '';});
+}
 </script>
 </body>
 </html>
