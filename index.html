@@ -3,17 +3,15 @@
 <head>
 <!--
 ═══════════════════════════════════════════════════════════════
-IdeaFlow AI · VERSIÓN 13.3 · "Segundo Cerebro por Etiquetas"
+IdeaFlow AI · VERSIÓN 13.2 · "Segundo Cerebro por Etiquetas"
 ───────────────────────────────────────────────────────────────
-v13.3 · CORRECCIÓN: el asistente ahora guarda CADA idea como una
-ficha SEPARADA (antes metía todo en una sola ficha, lo que hacía
-que un número negativo de una idea contaminara a otra y se marcara
-como gasto, y que no se generaran chinchetas individuales).
-Cambios mínimos y quirúrgicos:
-· splitIdeas()           → divide listas numeradas, ";" o saltos de línea
-· extractLocationFromText() → detecta lugares conocidos o "en [Lugar]"
-· interpretCommand()     → el comando "crea" genera una ficha por idea
-No se ha modificado ninguna otra parte de la app.
+v13.2 · Mejoras sobre v13.1:
+1) Renderizado enriquecido del chat del asistente:
+   - **negritas** → NEGRITA
+   - URLs → enlaces clicables (target _blank)
+   - Emojis decorativos según palabras clave
+2) Captura con IA detecta direcciones y hace geocodificación
+   inversa automática para mostrar chincheta en el mapa.
 ═══════════════════════════════════════════════════════════════
 -->
 <meta charset="UTF-8">
@@ -145,6 +143,10 @@ pre.brief{white-space:pre-wrap;font-family:inherit;font-size:12px;line-height:1.
 .msg{max-width:85%;border-radius:16px;padding:10px 14px;font-size:12.5px;line-height:1.55;white-space:pre-wrap;animation:pop .18s ease}
 .msg.u{background:var(--accent);color:var(--accent-ink);border-bottom-right-radius:5px;align-self:flex-end}
 .msg.a{background:var(--card2);border:1px solid var(--border);border-bottom-left-radius:5px;align-self:flex-start;color:var(--text)}
+/* v17 · estilos para el renderizado enriquecido del chat */
+.msg a{color:var(--accent);text-decoration:underline;word-break:break-all}
+.msg strong{color:var(--accent);font-weight:800}
+.msg em{color:var(--muted);font-style:italic}
 .dots span{width:6px;height:6px;border-radius:99px;background:var(--accent);display:inline-block;margin:0 2px;animation:float 1s ease-in-out infinite}
 .ckrow{display:flex;align-items:center;gap:8px;background:var(--card2);border:1px solid var(--border);border-radius:13px;padding:8px 10px;margin-bottom:6px}
 .ckrow input{flex:1;background:transparent;border:none;outline:none;font-size:12.5px;min-width:0;color:var(--text)}
@@ -692,31 +694,6 @@ window.addEventListener('offline',function(){renderHeader();toast('📴 Sin cone
 function addIdea(o){var b={id:uid(),title:'',content:'',type:'idea',status:'pendiente',category:'ideas',emoji:'💡',tags:[],checklist:[],createdAt:new Date().toISOString(),dueDate:null,startDate:null,dueTime:null,endTime:null,recurrence:'',location:null,audio:null,imageId:null,url:null,amount:null};for(var k in o)b[k]=o[k];DB.ideas.unshift(b);save();syncPing();vib(30);return b;}
 function updateIdea(id,patch){DB.ideas=DB.ideas.map(function(i){if(i.id!==id)return i;var c={};for(var k in i)c[k]=i[k];for(var k2 in patch)c[k2]=patch[k2];return c;});save();syncPing();}
 function deleteIdea(id){var it=null;DB.ideas.forEach(function(i){if(i.id===id)it=i;});if(it&&it.imageId)idb.del(it.imageId);DB.ideas=DB.ideas.filter(function(i){return i.id!==id;});save();syncPing();toast('🗑️ Idea eliminada');}
-/* ══════════ v13.3 · CORRECCIÓN: fichas y ubicaciones SEPARADAS ══════════ */
-/* Divide un texto con varias ideas en fichas individuales.
-Detecta listas numeradas (1. 2. 3.), punto y coma o saltos de línea. */
-function splitIdeas(content){
-if(!content||content.trim().length<3)return [];
-var numbered=content.split(/\n?\s*\d+[\.\)]\s+/).map(function(p){return p.trim();}).filter(function(p){return p.length>=3;});
-if(numbered.length>1)return numbered;
-var parts=content.split(/[;\n]+/).map(function(p){return p.trim();}).filter(function(p){return p.length>=3;});
-if(parts.length>1)return parts;
-return [content.trim()];
-}
-/* Extrae la ubicación de cada idea: primero busca lugares ya conocidos
-(con coordenadas, chincheta directa) y luego el patrón "en [Lugar]". */
-function extractLocationFromText(txt){
-if(!txt)return null;
-var nq=norm(txt);
-for(var i=0;i<DB.settings.knownLocations.length;i++){
-var loc=DB.settings.knownLocations[i];
-if(nq.indexOf(norm(loc.name))>=0)return {name:loc.name,lat:loc.lat,lng:loc.lng};
-}
-var m=txt.match(/\ben\s+([A-ZÁÉÍÓÚÜÑ][A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 .,_-]{2,40})/);
-if(m)return {name:m[1].trim(),lat:null,lng:null};
-return null;
-}
-/* ══════════ fin bloque v13.3 ══════════ */
 function captureText(raw,extra){
 var an=analyzeText(raw);an.title=extractTitle(raw);an.content=raw;if(extra)for(var k in extra)an[k]=extra[k];
 var idea=addIdea(an);
@@ -1512,7 +1489,7 @@ var modes=[['nota','✍️','Nota'],['voz','🎙️','Voz'],['scan','📷','Esc�
 var h=ovHead('✨ Capturar');
 h+='<div class="hscroll" style="margin:0 -20px 14px;padding:0 20px">'+modes.map(function(m){return '<button class="chip'+(capMode===m[0]?' on':'')+'" onclick="capSetMode(\''+m[0]+'\')">'+m[1]+' '+m[2]+'</button>';}).join('')+'</div>';
 if(capMode==='nota'){
-h+='<textarea class="input" id="capTxt" rows="5" placeholder="Escribe tu idea… La IA detectará categoría, fechas, horas y etiquetas (#hashtags incluidos).&#10;Ej: “Recordar llevar el coche al taller mañana a las 9 #coche”"></textarea><div class="hscroll" style="margin-top:10px">'+DB.settings.knownLocations.slice(0,3).map(function(l,ix){return '<button class="chip'+(capLocPreset===l.name?' on':'')+'" onclick="capToggleLocIdx('+ix+')">📍 '+esc(l.name)+'</button>';}).join('')+'</div><button class="btn btn-acc" style="width:100%;margin-top:12px" onclick="capSaveNota()">Capturar con IA →</button>';
+h+='<textarea class="input" id="capTxt" rows="5" placeholder="Escribe tu idea… La IA detectará categoría, fechas, horas y etiquetas (#hashtags incluidos).&#10;Ej: "Recordar llevar el coche al taller mañana a las 9 #coche""></textarea><div class="hscroll" style="margin-top:10px">'+DB.settings.knownLocations.slice(0,3).map(function(l,ix){return '<button class="chip'+(capLocPreset===l.name?' on':'')+'" onclick="capToggleLocIdx('+ix+')">📍 '+esc(l.name)+'</button>';}).join('')+'</div><button class="btn btn-acc" style="width:100%;margin-top:12px" onclick="capSaveNota()">Capturar con IA →</button>';
 }else if(capMode==='voz'){
 var hintSR='Mismo sistema que el asistente: habla y, al terminar la frase, la ficha se guarda sola una única vez. Toca el botón para detener y guardar manualmente.';
 var hintNoSR='⚠️ Transcripción no disponible en este navegador (usa Chrome): se grabará el audio. Toca el botón para detener.';
@@ -1546,7 +1523,42 @@ openSheet(h,false,'','capture');
 }
 function capSetMode(m){stopRecCleanup();capMode=m;renderCapture();}
 function capToggleLocIdx(ix){var n=DB.settings.knownLocations[ix].name;capLocPreset=(capLocPreset===n)?'':n;renderCapture();}
-function capSaveNota(){var el=document.getElementById('capTxt');var v=el?el.value.trim():'';if(!v)return toast('Escribe algo primero','err');captureText(v,capLocPreset?{location:{name:capLocPreset,lat:null,lng:null}}:{});closeOverlay();renderAll();}
+/* v17 · capSaveNota con geocodificación automática de direcciones */
+function capSaveNota(){
+var el=document.getElementById('capTxt');var v=el?el.value.trim():'';
+if(!v)return toast('Escribe algo primero','err');
+/* Si hay preset de ubicación, usarlo directamente */
+if(capLocPreset){
+captureText(v,{location:{name:capLocPreset,lat:null,lng:null}});
+closeOverlay();renderAll();
+return;
+}
+/* Detectar dirección en el texto y geocodificarla automáticamente */
+var addr=null;
+var m1=v.match(/(?:en|direcci[oó]n|lugar|sitio|ubicaci[oó]n|calle|avenida|avda|plaza|paseo)\s+[:\-]?\s*([A-ZÁÉÍÓÚÜÑa-záéíóúüñ0-9][A-ZÁÉÍÓÚÜÑa-záéíóúüñ0-9 .,_-]{4,70})/i);
+if(m1)addr=m1[1].trim();
+else{
+var m2=v.match(/([A-ZÁÉÍÓÚÜÑ][a-záéíóúüñ]{2,}(?:\s+[A-ZÁÉÍÓÚÜÑa-záéíóúüñ]+){1,4},?\s*[A-ZÁÉÍÓÚÜÑ][a-záéíóúüñ]+(?:\s+\d+)?)\b/);
+if(m2)addr=m2[1].trim();
+}
+if(addr){
+toast('🔎 Buscando dirección en el mapa: "'+addr+'"…');
+geocode(addr).then(function(g){
+if(g){
+captureText(v,{location:{name:addr,lat:g.lat,lng:g.lng}});
+MV.lat=g.lat;MV.lng=g.lng;MV.z=Math.max(MV.z,14);MV.init=true;
+toast('📍 Chincheta añadida al mapa: '+addr);
+}else{
+captureText(v,{});
+toast('⚠️ No encontré la dirección, ficha guardada sin ubicación');
+}
+closeOverlay();renderAll();
+});
+}else{
+captureText(v,{});
+closeOverlay();renderAll();
+}
+}
 function capSaveTask(){var el=document.getElementById('capTxt');var v=el?el.value.trim():'';if(!v)return toast('Escribe algo primero','err');var an=analyzeText(v);an.title=extractTitle(v);an.content=v;an.type='task';addIdea(an);if(an.tags.length)toast('🏷️ Etiquetas: '+an.tags.map(function(t){return '#'+t;}).join(' '));toast('☑️ Tarea creada'+(an.dueTime?' · ⏰ '+an.dueTime:''));closeOverlay();renderAll();}
 function capSaveMoney(type){var a=document.getElementById('capAmt'),t2=document.getElementById('capTxt');var amt=parseFloat(a?a.value.replace(',','.'):0);var txt=t2?t2.value.trim():'';if(!amt)return toast('Indica el importe','err');addIdea({title:extractTitle(txt||(type==='expense'?'Gasto':'Ingreso')),content:txt,type:type,amount:Math.abs(amt),category:'finanzas',emoji:type==='expense'?'💸':'💰',tags:['dinero'],status:'completado'});toast((type==='expense'?'💸 Gasto':'💰 Ingreso')+' registrado');closeOverlay();renderAll();}
 function capSaveLink(){var el=document.getElementById('capUrl');var u=el?el.value.trim():'';if(!/^https?:\/\//i.test(u))return toast('URL no válida','err');urlLoading=true;renderCapture();aiUrlMeta(u).then(function(meta){addIdea({title:meta.title||u,content:(meta.desc||'')+'\n'+u,type:'link',url:{url:u,title:meta.title,domain:u.replace(/^https?:\/\//,'').split('/')[0]},category:'aprendizaje',emoji:'🔗',tags:['enlace']});urlLoading=false;toast('🔗 Enlace capturado con metadatos');closeOverlay();renderAll();});}
@@ -1845,7 +1857,7 @@ h+=acc('Datos y copias','db',DB.ideas.length,
 '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn btn-ghost" style="flex-direction:column;padding:11px;font-size:11px" onclick="exportJSON()">'+ic('down',15)+'Exportar todo</button><label class="btn btn-ghost" style="flex-direction:column;padding:11px;font-size:11px;cursor:pointer">'+ic('up',15)+'Importar datos<input type="file" accept=".json" style="display:none" onchange="if(this.files[0])importJSON(this.files[0])"></label><button class="btn btn-ghost" style="flex-direction:column;padding:11px;font-size:11px" onclick="snapshot()">'+ic('db',15)+'Instantánea local</button><button class="btn btn-ghost" style="flex-direction:column;padding:11px;font-size:11px" onclick="restoreSnap()">'+ic('refresh',15)+'Restaurar copia</button></div>'+
 '<button class="btn btn-acc" style="width:100%" onclick="doInstall()">📲 Instalar app (pantalla completa)</button>'+
 '<button class="btn btn-danger" style="width:100%" onclick="resetAll()">🗑️ Borrar todos los datos</button>');
-h+='<div class="tiny muted" style="text-align:center;padding:6px 0 4px">IdeaFlow AI v13.3 · Segundo cerebro por etiquetas · OpenRouter · IndexedDB</div>';
+h+='<div class="tiny muted" style="text-align:center;padding:6px 0 4px">IdeaFlow AI v13.2 · Segundo cerebro por etiquetas · OpenRouter · IndexedDB</div>';
 openSheet(h,true);
 }
 function stToggle(t2){settingsOpen=(settingsOpen===t2)?'':t2;renderSettingsSheet();}
@@ -1923,7 +1935,7 @@ done(p.coords.latitude,p.coords.longitude);
 function interpretCommand(q){
 var nq=norm(q);
 if(/(guarda|guardar|guarde|salva|marca|registra|apunta).{0,40}(posicion|ubicacion|localizacion|punto|sitio|lugar)/.test(nq)||/(posicion|ubicacion).{0,20}como/.test(nq)){
-var nm=q.match(/(?:como|con el nombre|llamad[ao]|nombre)\s+["“']?([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9][A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 ._-]{1,30})/i);
+var nm=q.match(/(?:como|con el nombre|llamad[ao]|nombre)\s+[""']?([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9][A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9 ._-]{1,30})/i);
 savePosAs(nm?nm[1].trim():'');
 return true;
 }
@@ -1933,43 +1945,42 @@ if(added.length){respondLocal('🧠 Guardado en memoria permanente:\n'+added.map
 }
 var ap=q.match(/^apunta\s*[:\-]\s*(.{3,})/i);
 if(ap){var idea2=captureText(ap[1].trim());respondLocal('✅ He creado y guardado la ficha "'+idea2.title+'" en '+catOf(idea2).emoji+' '+catOf(idea2).name+(idea2.dueTime?' · ⏰ '+idea2.dueTime:'')+'. La tienes en el feed, el tablero y la agenda.');return true;}
-/* v13.3 · El comando "crea" ahora genera UNA ficha por cada idea y
-una chincheta por cada ubicación detectada. Antes metía todo junto
-en una sola ficha, lo que contaminaba la detección de gastos y
-bloqueaba las chinchetas individuales. */
 var mi=q.match(/(?:crea|crear|guarda|guardar|añade|añadir|agrega|agregar)\s+(?:una?\s+|varias?\s+|estas?\s+)?(ideas?|notas?|tareas?|recordatorios?|fichas?)\s*[:\-]?\s*(.{3,})/i);
 if(mi){
-var content=mi[2].trim();
-var ideas=splitIdeas(content);
-var created=[];
-ideas.forEach(function(txt){
-var idea=captureText(txt);
-var loc=extractLocationFromText(txt);
-if(loc){
-if(loc.lat!=null){
-updateIdea(idea.id,{location:loc});
-}else{
-geocode(loc.name).then(function(g){
-if(g){
-updateIdea(idea.id,{location:{name:loc.name,lat:g.lat,lng:g.lng}});
-if(view==='mapa')renderMain();
-}
-});
-}
-}
-created.push(idea);
-});
-if(created.length>1){
-respondLocal('✅ He creado '+created.length+' fichas por separado:\n'+created.map(function(i){return '• '+i.emoji+' '+i.title+(i.location?' 📍 '+i.location.name:'');}).join('\n')+'\nCada una guardada individualmente en el feed, el tablero y la agenda.');
-}else{
-var idea=created[0];
-respondLocal('✅ He interpretado tu ficha y la he guardado correctamente:\n• Título: '+idea.title+'\n• Categoría: '+catOf(idea).emoji+' '+catOf(idea).name+'\n• Estado: '+STATUS[idea.status].name+(idea.dueDate?'\n• Fecha: '+fmtShort(idea.dueDate)+(idea.dueTime?' · '+idea.dueTime+(idea.endTime?'–'+idea.endTime:''):''):'')+(idea.amount?'\n• Importe: '+eur(idea.amount):'')+(idea.location?'\n• Ubicación: 📍 '+idea.location.name:'')+'\nLa verás en el feed, el tablero y la agenda.');
-}
+var idea=captureText(mi[2].trim());
+respondLocal('✅ He interpretado tu ficha y la he guardado correctamente:\n• Título: '+idea.title+'\n• Categoría: '+catOf(idea).emoji+' '+catOf(idea).name+'\n• Estado: '+STATUS[idea.status].name+(idea.dueDate?'\n• Fecha: '+fmtShort(idea.dueDate)+(idea.dueTime?' · '+idea.dueTime+(idea.endTime?'–'+idea.endTime:''):''):'')+(idea.amount?'\n• Importe: '+eur(idea.amount):'')+'\nLa verás en el feed, el tablero y la agenda.');
 return true;
 }
 return false;
 }
 function openChat(){renderChat();}
+/* v17 · renderRichText para negritas, enlaces y emojis decorativos */
+function renderRichText(t){
+var s=esc(t);
+s=s.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+s=s.replace(/(^|[\s(])\*([^*\n]+)\*([\s).,!?;:]|$)/g,'$1<em>$2</em>$3');
+s=s.replace(/(https?:\/\/[^\s<)]+)/g,'<a href="$1" target="_blank" rel="noopener">$1</a>');
+var emojis={
+'importante':'⭐','clave':'🔑','atencion':'⚠️','atención':'⚠️','cuidado':'⚠️',
+'error':'❌','correcto':'✅','bien':'✅','perfecto':'✅',
+'idea':'💡','nota':'📝','tarea':'☑️','recordatorio':'⏰','alarm':'⏰',
+'fecha':'📅','tiempo':'⏰','hora':'🕐','dinero':'💰','euro':'💶','precio':'💲',
+'coche':'🚗','viaje':'✈️','vuelo':'✈️','hotel':'🏨','casa':'🏠','hogar':'🏠',
+'familia':'👨‍👩‍👧','trabajo':'💼','proyecto':'📊','negocio':'💼','cliente':'🤝',
+'salud':'🏥','medico':'👨‍⚕️','médico':'👨‍⚕️','gimnasio':'🏋️',
+'comida':'🍽️','restaurante':'🍴','receta':'📖','libro':'📚','lectura':'📖',
+'clima':'🌤️','lluvia':'🌧️','sol':'☀️','musica':'🎵','música':'🎵',
+'pelicula':'🎬','película':'🎬','deporte':'⚽','web':'🌐','internet':'🌐',
+'email':'📧','telefono':'📱','teléfono':'📱','ubicacion':'📍','ubicación':'📍',
+'lugar':'📍','mapa':'🗺️','consejo':'💡','resumen':'📋','ejemplo':'📌',
+'fuente':'📎','enlace':'🔗','paso':'➡️'
+};
+Object.keys(emojis).forEach(function(k){
+var re=new RegExp('(^|[\\s.,;:!?()])('+k+')\\b','gi');
+s=s.replace(re,'$1'+emojis[k]+' $2');
+});
+return s;
+}
 function renderChat(){
 var S=DB.settings;
 var h='';
@@ -1978,7 +1989,11 @@ h+='<div class="hscroll" style="flex-shrink:0;margin-bottom:4px"><button class="
 if(chatRecOn)h+='<div class="tiny" style="flex-shrink:0;color:#ef4444;font-weight:800;display:flex;align-items:center;gap:6px;margin-bottom:4px"><span style="width:7px;height:7px;border-radius:99px;background:#ef4444;animation:float 1s ease-in-out infinite"></span> Escuchando… habla: al terminar la frase se envía sola</div>';
 h+='<div id="chatList" style="flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;gap:9px;padding:10px;scrollbar-width:none;background:color-mix(in srgb,var(--bg2) 60%,transparent);border:1px solid var(--border);border-radius:16px">';
 if(!DB.chat.length)h+='<div style="text-align:center;padding:24px 10px;font-size:12.5px;color:var(--muted)"><div style="font-size:30px;margin-bottom:9px">🧠</div>Soy tu segundo cerebro: conozco tus fichas, tus etiquetas y tu memoria.<br>Si algo no está en tus datos, lo busco en internet (modo 🌐 ON).<br>Prueba "¿Qué tiempo hace en Barcelona?" o "novedades de IA".</div>';
-DB.chat.forEach(function(m,mix){h+='<div class="msg '+(m.role==='user'?'u':'a')+'">'+esc(m.content)+(m.role==='assistant'?'<div style="display:flex;gap:8px;margin-top:6px;align-items:center"><button class="tiny" style="font-weight:800;color:var(--accent);display:flex;align-items:center;gap:3px" onclick="speakMsg('+mix+')">'+ic('vol',11)+' Escuchar</button>'+(m.src?'<span class="tiny" style="opacity:.6;font-weight:800;text-transform:uppercase">'+esc(m.src)+'</span>':'')+'</div>':'')+'</div>';});
+/* v17 · aplico renderRichText solo a los mensajes del asistente */
+DB.chat.forEach(function(m,mix){
+var content=(m.role==='assistant')?renderRichText(m.content):esc(m.content);
+h+='<div class="msg '+(m.role==='user'?'u':'a')+'">'+content+(m.role==='assistant'?'<div style="display:flex;gap:8px;margin-top:6px;align-items:center"><button class="tiny" style="font-weight:800;color:var(--accent);display:flex;align-items:center;gap:3px" onclick="speakMsg('+mix+')">'+ic('vol',11)+' Escuchar</button>'+(m.src?'<span class="tiny" style="opacity:.6;font-weight:800;text-transform:uppercase">'+esc(m.src)+'</span>':'')+'</div>':'')+'</div>';
+});
 if(chatLoading)h+='<div class="msg a dots"><span></span><span style="animation-delay:.15s"></span><span style="animation-delay:.3s"></span></div>';
 h+='</div>';
 h+='<div class="hscroll" style="flex-shrink:0;margin:8px -20px 8px;padding:0 20px">'+CHIPS.map(function(c,ix){return '<button class="chip" style="color:var(--accent)" onclick="chatChip('+ix+')">'+esc(c)+'</button>';}).join('')+'</div>';
