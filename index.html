@@ -1937,7 +1937,7 @@ if(ap){var idea2=captureText(ap[1].trim());respondLocal('✅ He creado y guardad
 una chincheta por cada ubicación detectada. Antes metía todo junto
 en una sola ficha, lo que contaminaba la detección de gastos y
 bloqueaba las chinchetas individuales. */
-var mi=q.match(/(?:crea|crear)\s+(?:una?\s+|varias?\s+|estas?\s+)?(ideas?|notas?|tareas?|recordatorios?|fichas?)\s*[:\-]?\s*(.{3,})/i);
+var mi=q.match(/(?:crea|crear|guarda|guardar|añade|añadir|agrega|agregar)\s+(?:una?\s+|varias?\s+|estas?\s+)?(ideas?|notas?|tareas?|recordatorios?|fichas?)\s*[:\-]?\s*(.{3,})/i);
 if(mi){
 var content=mi[2].trim();
 var ideas=splitIdeas(content);
